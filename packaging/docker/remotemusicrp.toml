@@ -1,0 +1,13 @@
+# RemoteMusicRP settings baked into the container image. No secrets.
+# Override any value with REMOTEMUSICRP_* environment variables.
+#
+# The UI listens on 127.0.0.1 inside the container. Reach it either with
+# host networking (Linux, local only) or through the Caddy container in the
+# compose example, which shares this container's network.
+bind = "127.0.0.1:8484"
+data_dir = "/data"
+
+# Master key: a 0600 file on its own volume, separate from /data.
+[key_store]
+kind = "file"
+path = "/keys/master.key"

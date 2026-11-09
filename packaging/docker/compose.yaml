@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# RemoteMusicRP server mode (experimental, x86_64 only) with Docker Compose.
+#
+# Before the first start:
+#   1. Download the Discord Social SDK yourself (see the install guide) and
+#      put libdiscord_partner_sdk.so next to this file. We may not ship it.
+#   2. Pick ONE way to open the web UI below (local or Caddy).
+#
+#   docker compose up -d
+#
+# The master key lives on its own volume (keys), separate from the data.
+
+services:
+  remotemusicrp:
+    image: ammarx4/remotemusicrp:latest-sdk
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    volumes:
+      - data:/data
+      - keys:/keys
+      - ./libdiscord_partner_sdk.so:/sdk/libdiscord_partner_sdk.so:ro
+
+    # --- Option A: local only (Linux). The UI is at http://127.0.0.1:8484
+    # on this machine and nowhere else.
+    network_mode: host
+
+    # --- Option B: reachable from anywhere through Caddy (HTTPS).
+    # Delete `network_mode: host` above, uncomment these lines and the caddy
+    # service below, and set your domain in ./Caddyfile.
+    # ports: ["80:80", "443:443"]
+    # environment:
+    #   REMOTEMUSICRP_PUBLIC_ORIGIN: "https://remotemusicrp.example.com"
+
+  # caddy:
+  #   image: caddy:2
+  #   restart: unless-stopped
+  #   # Shares the app's network: Caddy reaches it on 127.0.0.1:8484, and the
+  #   # app sees each visitor's real address (needed for login lockouts).
+  #   network_mode: "service:remotemusicrp"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+
+volumes:
+  data:
+  keys:
+  # caddy_data:
+  # caddy_config:

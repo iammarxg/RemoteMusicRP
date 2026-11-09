@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Caddy in front of RemoteMusicRP: automatic HTTPS certificates.
+# In the RemoteMusicRP config set:
+#   public_origin = "https://remotemusicrp.example.com"
+# Replace the host name below with yours (its DNS must point to this server).
+
+remotemusicrp.example.com {
+	# RemoteMusicRP sets its own security headers; Caddy adds HSTS.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# Same machine: 127.0.0.1:8484. Docker Compose example: remotemusicrp:8484.
+	reverse_proxy 127.0.0.1:8484
+}

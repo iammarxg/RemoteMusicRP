@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=RemoteMusicRP
+GenericName=Discord music status
+Comment=Show what you're playing on Last.fm as your Discord status
+Exec=remotemusicrp run
+Icon=remotemusicrp
+# Runs in the background with a tray icon (or opens the web UI in the
+# browser when the desktop has no tray).
+Terminal=false
+Categories=AudioVideo;Audio;Network;
+Keywords=lastfm;discord;scrobble;presence;

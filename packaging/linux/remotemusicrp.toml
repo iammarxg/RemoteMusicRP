@@ -1,0 +1,23 @@
+# RemoteMusicRP settings for the system service (deb/rpm/Arch packages).
+# This file holds no secrets: your Last.fm key, Discord sign-in and email
+# details are entered in the web UI and stored encrypted.
+# Environment variables (REMOTEMUSICRP_*) override these values.
+
+# Web UI address. Keep 127.0.0.1 unless a TLS reverse proxy is in front;
+# any other address also needs public_origin below.
+bind = "127.0.0.1:8484"
+# public_origin = "https://remotemusicrp.example.com"
+
+data_dir = "/var/lib/remotemusicrp/data"
+
+# The master key lives in a 0600 file outside the data directory.
+[key_store]
+kind = "file"
+path = "/var/lib/remotemusicrp/keys/master.key"
+
+# Experimental server mode (Linux x86_64 only): sign in to Discord without a
+# Discord app on this machine. Download the Discord Social SDK yourself and
+# point to the library; see the install guide.
+# [discord]
+# mode = "social-sdk"
+# sdk_library = "/opt/discord-social-sdk/libdiscord_partner_sdk.so"

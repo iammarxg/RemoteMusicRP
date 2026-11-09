@@ -1,0 +1,45 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / web UI
+node_modules/
+/web/build/
+/web/.svelte-kit/
+
+# Secrets & local config (never commit)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.minisign
+master.key
+
+# Local data
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+/data/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Discord Social SDK: proprietary, must NOT be redistributed (SDK Terms §2.b(ii)).
+# Each user downloads it themselves.
+DiscordSocialSdk-*.zip
+discord_social_sdk/
+**/libdiscord_partner_sdk.*
+**/discord_partner_sdk.*
+spikes/**/sdk/
+spikes/**/headless-test
+/web/dist/
+/web/node_modules/
+
+# Local tooling and generated release files
+/.claude/
+/THIRD-PARTY-LICENSES.html

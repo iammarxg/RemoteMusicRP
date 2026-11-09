@@ -1,0 +1,28 @@
+[package]
+name = "remotemusicrp-discord-sdk-ffi"
+description = "Minimal, audited FFI to the Discord Social SDK C API (loaded at runtime from a user-supplied library)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+libloading = "0.8.9"
+remotemusicrp-discord = { version = "0.1.0", path = "../discord" }
+tokio = { version = "1.54.1", features = ["sync", "time"] }
+tracing = "0.1.44"
+zeroize = "1.9.1"
+
+# The one crate allowed to use `unsafe` (owner sign-off 2026-11-09, CLAUDE.md §3).
+# Same lints as the workspace otherwise.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+dbg_macro = "warn"
+undocumented_unsafe_blocks = "deny"

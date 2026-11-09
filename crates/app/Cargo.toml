@@ -1,0 +1,99 @@
+[package]
+name = "remotemusicrp"
+description = "Show your Last.fm now playing as Discord Rich Presence (self-hosted)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio", "query"] }
+base64 = "0.23.1"
+lettre = { version = "0.11.23", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls", "ring", "rustls-platform-verifier"] }
+minisign-verify = "0.3.0"
+rust-embed = { version = "8.13.0", features = ["include-exclude"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+remotemusicrp-core = { version = "0.1.0", path = "../core" }
+remotemusicrp-crypto = { version = "0.1.0", path = "../crypto", features = ["os-keystore"] }
+remotemusicrp-discord = { version = "0.1.0", path = "../discord" }
+remotemusicrp-discord-sdk-ffi = { version = "0.1.0", path = "../discord-sdk-ffi", optional = true }
+remotemusicrp-providers = { version = "0.1.0", path = "../providers" }
+remotemusicrp-storage = { version = "0.1.0", path = "../storage" }
+self-replace = "1.5.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+tokio = { version = "1.54.1", features = ["rt", "macros", "signal", "time", "sync", "net"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "ansi"] }
+
+# System tray on desktop platforms.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon = { version = "0.26.1", default-features = false }
+winit = { version = "0.30.13", default-features = false }
+
+# Linux tray: StatusNotifierItem over D-Bus (pure Rust, same zbus 5 as the
+# Secret Service keystore; no GTK).
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.7", default-features = false, features = ["tokio"] }
+
+[features]
+# EXPERIMENTAL server mode via the Discord Social SDK (Linux x86_64). Off by
+# default; the SDK itself is never bundled (each owner downloads it).
+social-sdk = ["dep:remotemusicrp-discord-sdk-ffi"]
+
+[lints]
+workspace = true
+
+# ---- Linux packages (built by the release workflow) -------------------------
+# Paths are relative to this crate. `target/release` is rewritten by the
+# tools for --target builds.
+
+[package.metadata.deb]
+name = "remotemusicrp"
+maintainer = "RemoteMusicRP maintainers <https://github.com/iammarxg/RemoteMusicRP/issues>"
+copyright = "RemoteMusicRP contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Self-hosted bridge that shows the track you're scrobbling to Last.fm as \
+Discord Rich Presence. Runs as a hardened system service with a local web UI \
+on 127.0.0.1:8484. No telemetry; you bring your own Discord app and Last.fm \
+API key."""
+section = "sound"
+priority = "optional"
+# Not "$auto": dpkg-shlibdeps on a new build host maps the libpthread/libdl
+# stubs to glibc >= 2.34, but the zig build only needs 2.28 (checked with
+# objdump -T). No other shared libraries are linked.
+depends = "libc6 (>= 2.28)"
+# Needed only by the Discord Social SDK in the experimental server mode.
+suggests = "libatomic1, libasound2t64 | libasound2, libpulse0, libx11-6"
+conf-files = ["/etc/remotemusicrp/remotemusicrp.toml"]
+assets = [
+    ["target/release/remotemusicrp", "usr/bin/", "755"],
+    ["../../packaging/linux/remotemusicrp.toml", "etc/remotemusicrp/remotemusicrp.toml", "644"],
+    ["../../packaging/examples/Caddyfile", "usr/share/doc/remotemusicrp/examples/Caddyfile", "644"],
+    ["../../packaging/examples/nginx.conf", "usr/share/doc/remotemusicrp/examples/nginx.conf", "644"],
+    ["../../docs/INSTALL.md", "usr/share/doc/remotemusicrp/INSTALL.md", "644"],
+]
+# Installed but not started: set it up, then `systemctl enable --now remotemusicrp`.
+systemd-units = { unit-name = "remotemusicrp", unit-scripts = "../../packaging/linux", enable = false, start = false }
+
+[package.metadata.generate-rpm]
+name = "remotemusicrp"
+license = "AGPL-3.0-only"
+summary = "Show your Last.fm now playing as Discord Rich Presence"
+url = "https://github.com/iammarxg/RemoteMusicRP"
+assets = [
+    { source = "target/release/remotemusicrp", dest = "/usr/bin/remotemusicrp", mode = "755" },
+    { source = "../../packaging/linux/remotemusicrp.toml", dest = "/etc/remotemusicrp/remotemusicrp.toml", mode = "644", config = "noreplace" },
+    { source = "../../packaging/linux/remotemusicrp.service", dest = "/usr/lib/systemd/system/remotemusicrp.service", mode = "644" },
+    { source = "../../packaging/examples/Caddyfile", dest = "/usr/share/doc/remotemusicrp/examples/Caddyfile", mode = "644", doc = true },
+    { source = "../../packaging/examples/nginx.conf", dest = "/usr/share/doc/remotemusicrp/examples/nginx.conf", mode = "644", doc = true },
+    { source = "../../docs/INSTALL.md", dest = "/usr/share/doc/remotemusicrp/INSTALL.md", mode = "644", doc = true },
+    { source = "../../LICENSE", dest = "/usr/share/licenses/remotemusicrp/LICENSE", mode = "644", doc = true },
+]
+post_install_script = "systemctl daemon-reload >/dev/null 2>&1 || :"
+post_uninstall_script = "systemctl daemon-reload >/dev/null 2>&1 || :"
+

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Arch Linux package from the signed release tarballs. The release workflow
+# fills in @VERSION@ and the checksums and attaches the result as PKGBUILD.
+# Maintainer: RemoteMusicRP maintainers <https://github.com/iammarxg/RemoteMusicRP>
+
+pkgname=remotemusicrp-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Show your Last.fm now playing as Discord Rich Presence (self-hosted)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/iammarxg/RemoteMusicRP"
+license=('AGPL-3.0-only')
+depends=('glibc' 'gcc-libs')
+provides=('remotemusicrp')
+conflicts=('remotemusicrp')
+backup=('etc/remotemusicrp/remotemusicrp.toml')
+source_x86_64=("$url/releases/download/v$pkgver/remotemusicrp-$pkgver-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/remotemusicrp-$pkgver-aarch64-unknown-linux-gnu.tar.gz")
+sha256sums_x86_64=('@SHA256_X86_64@')
+sha256sums_aarch64=('@SHA256_AARCH64@')
+
+package() {
+  cd "remotemusicrp-$pkgver-$CARCH-unknown-linux-gnu"
+  install -Dm755 remotemusicrp "$pkgdir/usr/bin/remotemusicrp"
+  install -Dm644 packaging/remotemusicrp.service "$pkgdir/usr/lib/systemd/system/remotemusicrp.service"
+  install -Dm644 packaging/remotemusicrp.toml "$pkgdir/etc/remotemusicrp/remotemusicrp.toml"
+  install -Dm644 examples/Caddyfile "$pkgdir/usr/share/doc/remotemusicrp/examples/Caddyfile"
+  install -Dm644 examples/nginx.conf "$pkgdir/usr/share/doc/remotemusicrp/examples/nginx.conf"
+  install -Dm644 INSTALL.md "$pkgdir/usr/share/doc/remotemusicrp/INSTALL.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 THIRD-PARTY-LICENSES.html "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-LICENSES.html"
+}

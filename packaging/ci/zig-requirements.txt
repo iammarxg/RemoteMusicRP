@@ -1,0 +1,5 @@
+# Zig (used by cargo-zigbuild to link Linux builds against glibc 2.28).
+# Installed with --require-hashes: only these exact wheels are accepted.
+ziglang==0.15.2 \
+    --hash=sha256:806316453d1ede7174ed3fefb8e5348154629089c3bb5fe812dfd0e172fac130 \
+    --hash=sha256:edc0aa60ec964a4cf462d40f68d7de242ddf37fd9a80f2afaee6397059463230
