@@ -1,0 +1,7 @@
+# Normalise text to LF in the repository. Shell scripts, packaging files and
+# workflows must keep LF in every checkout (they run on Linux).
+* text=auto
+*.sh text eol=lf
+packaging/** text eol=lf
+.github/** text eol=lf
+*.woff2 binary
