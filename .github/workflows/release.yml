@@ -64,6 +64,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (2026-11)
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+          # Same components as rust-toolchain.toml, so rustup never adds
+          # them later (that clashed with the ARM runner image).
+          components: rustfmt, clippy
       - name: Licence report and SBOM
         run: |
           cargo install --locked --features cli cargo-about@0.9.3
@@ -86,7 +89,7 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: prepare
     strategy:
-      fail-fast: true
+      fail-fast: false # see every platform's problem in one run
       matrix:
         include:
           - os: windows-2025
@@ -119,6 +122,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
+          components: rustfmt, clippy
       - name: Embed the update signing public key
         shell: bash
         run: echo "REMOTEMUSICRP_UPDATE_PUBKEY=$(sed -n 2p remotemusicrp.pub)" >> "$GITHUB_ENV"
