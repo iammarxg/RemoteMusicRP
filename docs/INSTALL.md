@@ -10,6 +10,31 @@ You run your own copy. You need:
 
 The setup wizard in the web UI walks you through both.
 
+## Which download do I need?
+
+RemoteMusicRP reaches Discord in one of two ways:
+
+- **Desktop mode (the normal one):** it talks to the **Discord desktop app
+  running on the same computer, signed in as you**. Nothing else to set up.
+- **Server mode (experimental):** **no Discord app needed**. It uses
+  Discord's Social SDK, which you download yourself. **Linux x86_64 only.**
+
+| Download | Kind | Discord app open on the same computer? |
+|---|---|---|
+| Windows zip / `.exe` | Desktop | **Yes, required** |
+| macOS tarball | Desktop | **Yes, required** |
+| Linux x86_64 **AppImage** | Desktop | **Yes** by default. Server mode possible but unusual |
+| Linux x86_64 **`.deb` / `.rpm` / Arch `PKGBUILD`** | **Server** (system service) | **No: these need server mode.** The service runs as its own system user and can't see your desktop's Discord app |
+| Linux x86_64 **tarball** | Either | Yes if you run it as yourself on a desktop; no if you set it up as a server in server mode |
+| Docker **`ammarx4/remotemusicrp:latest-sdk`** | **Server** (amd64) | **No** (server mode, with the SDK you download) |
+| Linux **ARM64** (AppImage, `.deb`, `.rpm`, tarball) | Desktop only | **Yes, required.** Server mode isn't available (the SDK is x86_64 only), and Discord doesn't offer its official desktop app for ARM64 Linux, so this only works with a Discord client for ARM64 that supports Rich Presence (untested) |
+| Docker **`ammarx4/remotemusicrp:latest`** (amd64, arm64) | Desktop mode in a container | **Yes**, and the container must be given the Discord app's socket. Not tested; for most people `latest-sdk` is the one to use |
+
+In short: **on your own PC**, use the Windows, macOS or Linux AppImage
+download and keep Discord open. **On a server or NAS with no Discord app**,
+use the Linux x86_64 `.deb`/`.rpm`/Arch package or the Docker `-sdk` image,
+and set up [server mode](#7-server-mode-no-discord-app-needed-experimental).
+
 **Contents:**
 - [Download and check the files](#1-download-and-check-the-files)
 - [Windows 11](#2-windows-11)
@@ -42,6 +67,9 @@ It should say `Signature and comment signature verified`.
    `C:\Users\<you>\Apps\RemoteMusicRP`.
 2. Start **`remotemusicrp-desktop.exe`**. It runs in the background with a
    tray icon and no console window. Click the tray icon to open the web UI.
+   (The single `remotemusicrp-x86_64-pc-windows-msvc.exe` download works
+   too: double-clicked, it moves itself to the background after a brief
+   console flash.)
 3. **"Windows protected your PC" warning:** the app isn't signed with a paid
    certificate, so SmartScreen doesn't know it. Click **More info**, then
    **Run anyway**. You only need to do this once per version.
@@ -56,7 +84,9 @@ Windows Credential Manager. If the app doesn't start, look at
 `%LOCALAPPDATA%\RemoteMusicRP\desktop.log`.
 
 Admin commands such as `remotemusicrp.exe status` or
-`remotemusicrp.exe reset-password` run from a terminal in that folder.
+`remotemusicrp.exe reset-password` run from a terminal in that folder. To
+keep the app itself in a terminal with its log visible, use
+`remotemusicrp.exe run`.
 
 ## 3. macOS (Apple Silicon)
 
@@ -72,8 +102,12 @@ Admin commands such as `remotemusicrp.exe status` or
 
 ## 4. Linux desktop (AppImage)
 
-1. Download `remotemusicrp-x86_64-unknown-linux-gnu.AppImage` (or the
-   `aarch64` one for ARM).
+**Desktop release: the Discord desktop app must be open on the same
+computer.**
+
+1. Download `remotemusicrp-x86_64-unknown-linux-gnu.AppImage`. (The
+   `aarch64` one is for ARM64 desktops, but Discord has no official ARM64
+   Linux app; see [Which download do I need?](#which-download-do-i-need).)
 2. Make it executable and start it:
    ```
    chmod +x remotemusicrp-*.AppImage
@@ -91,6 +125,14 @@ The AppImage updates itself (with your OK). If it won't start because FUSE is
 missing, run it with `--appimage-extract-and-run`, or use the tarball.
 
 ## 5. Linux server (deb, rpm, Arch, tarball)
+
+**Server release: no Discord app needed, but it only works in
+[server mode](#7-server-mode-no-discord-app-needed-experimental), which is
+Linux x86_64 only.** The service runs as its own system user, so it can't
+reach a Discord app on your desktop even if one is open. On a Linux desktop
+where you want to use the Discord app, use the [AppImage](#4-linux-desktop-appimage)
+instead. The ARM64 packages can't do server mode, so they aren't useful as
+servers.
 
 These install RemoteMusicRP as a hardened system service. It runs as a
 throwaway user, can only write to its own folder, and listens on
@@ -121,7 +163,8 @@ Then:
    ```
    ssh -L 8484:127.0.0.1:8484 you@your-server
    ```
-4. A server has no Discord app, so you need [server mode](#7-server-mode-no-discord-app-needed-experimental).
+4. Set up [server mode](#7-server-mode-no-discord-app-needed-experimental)
+   (required for these packages).
 
 Logs: `journalctl -u remotemusicrp`. Data is in
 `/var/lib/remotemusicrp/data`; the encryption key is in
@@ -136,10 +179,10 @@ match).
 
 Images on Docker Hub, signed with Sigstore cosign:
 
-| Image | What |
-|---|---|
-| `ammarx4/remotemusicrp:latest-sdk` | Server mode (experimental), amd64 only |
-| `ammarx4/remotemusicrp:latest` | Minimal image, amd64 and arm64 |
+| Image | What | Discord app needed? |
+|---|---|---|
+| `ammarx4/remotemusicrp:latest-sdk` | **Server release.** Server mode (experimental), amd64 only. Use this one | **No** |
+| `ammarx4/remotemusicrp:latest` | Minimal image, amd64 and arm64, desktop mode only | **Yes**, on the same machine, with its socket passed into the container (not tested) |
 
 The container runs as a non-root user with a read-only filesystem. It keeps
 data in the `/data` volume and the encryption key in a separate `/keys`

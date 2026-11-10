@@ -6,16 +6,23 @@
 
 ## Downloads
 
-| System | File |
-|---|---|
-| Windows 11 x64 | `remotemusicrp-<version>-x86_64-pc-windows-msvc.zip` (run `remotemusicrp-desktop.exe`) |
-| macOS (Apple Silicon) | `remotemusicrp-<version>-aarch64-apple-darwin.tar.gz` |
-| Linux desktop | `remotemusicrp-<target>.AppImage` |
-| Debian / Ubuntu | `remotemusicrp_<version>-1_<arch>.deb` |
-| Fedora / RHEL | `remotemusicrp-<version>-1.<arch>.rpm` |
-| Arch Linux | `PKGBUILD` |
-| Any Linux | `remotemusicrp-<version>-<target>.tar.gz` |
-| Docker | `ammarx4/remotemusicrp` (see the install guide) |
+**Desktop releases** need the Discord desktop app open on the same computer.
+**Server releases** need no Discord app but only work in the experimental
+server mode (Linux x86_64, with the Discord Social SDK you download yourself).
+
+| System | File | Kind |
+|---|---|---|
+| Windows 11 x64 | `remotemusicrp-<version>-x86_64-pc-windows-msvc.zip`, or the single `.exe` | Desktop |
+| macOS (Apple Silicon) | `remotemusicrp-<version>-aarch64-apple-darwin.tar.gz` | Desktop |
+| Linux desktop (x86_64) | `remotemusicrp-x86_64-unknown-linux-gnu.AppImage` | Desktop |
+| Debian / Ubuntu server (x86_64) | `remotemusicrp_<version>-1_amd64.deb` | **Server** |
+| Fedora / RHEL server (x86_64) | `remotemusicrp-<version>-1.x86_64.rpm` | **Server** |
+| Arch Linux server (x86_64) | `PKGBUILD` | **Server** |
+| Any Linux (x86_64) | `remotemusicrp-<version>-x86_64-unknown-linux-gnu.tar.gz` | Either |
+| Docker server (amd64) | `ammarx4/remotemusicrp:latest-sdk` | **Server** |
+| Linux ARM64 | AppImage, `.deb`, `.rpm`, tarball (`aarch64`/`arm64`) | Desktop only; Discord has no official ARM64 Linux app |
+
+Not sure which one? See [Which download do I need?](https://github.com/iammarxg/RemoteMusicRP/blob/main/docs/INSTALL.md#which-download-do-i-need).
 
 Every file is signed. Check a download with
 [minisign](https://jedisct1.github.io/minisign/):

@@ -28,9 +28,13 @@ minisign -Vm <file> -P RWQ0Snkh7EvjhsxdofSMvsiHaYLRSCY6wUHMQsrPAnNSQ2tXjnOqk+Ia
 RemoteMusicRP asks Last.fm what you're playing every few seconds and
 sends it to Discord as Rich Presence, through one of:
 
-- the **Discord app on the same computer** (the normal mode), or
-- **server mode** (experimental, Linux x86_64): Discord's official Social SDK,
-  so no Discord app is needed. You download the SDK yourself.
+- the **Discord app on the same computer** (desktop releases: Windows,
+  macOS, Linux AppImage), or
+- **server mode** (experimental, Linux x86_64 server releases: `.deb`,
+  `.rpm`, Arch, Docker `-sdk`): Discord's official Social SDK, so no
+  Discord app is needed. You download the SDK yourself.
+
+[Which download do I need?](docs/INSTALL.md#which-download-do-i-need)
 
 Album art comes from the iTunes Search API and the MusicBrainz Cover Art
 Archive. Data comes from Last.fm (powered by AudioScrobbler).
