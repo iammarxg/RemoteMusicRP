@@ -35,6 +35,9 @@ RemoteMusicRP: your Last.fm now playing as Discord Rich Presence.
 USAGE:
     remotemusicrp [--config <file>] <command>
 
+    On Windows, starting it with no command (a double-click) runs it in the
+    background with a tray icon; use `run` to keep it in this terminal.
+
 COMMANDS:
     run [--no-tray]          Start presence and the web UI (default)
     status                   Show configuration status (no secrets)
@@ -45,6 +48,52 @@ COMMANDS:
     help                     Show this help
 ";
 
+/// Windows: started with no arguments (a double-click in Explorer), the
+/// console program would sit in a terminal window. Instead it starts itself
+/// again hidden with `run` (tray icon, output to `desktop.log`) and exits,
+/// like `remotemusicrp-desktop.exe` does. `remotemusicrp run` and the admin
+/// commands keep printing in the terminal. No `unsafe`: only std's
+/// `CREATE_NO_WINDOW` process flag.
+#[cfg(windows)]
+mod windows_background {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, ExitCode, Stdio};
+
+    /// `CREATE_NO_WINDOW` from the Win32 process creation flags.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    pub fn relaunch_hidden() -> ExitCode {
+        let Ok(exe) = std::env::current_exe() else {
+            return ExitCode::FAILURE;
+        };
+        let log = std::env::var_os("LOCALAPPDATA")
+            .filter(|v| !v.is_empty())
+            .map(|d| std::path::PathBuf::from(d).join("RemoteMusicRP"))
+            .and_then(|dir| {
+                std::fs::create_dir_all(&dir).ok()?;
+                std::fs::File::create(dir.join("desktop.log")).ok()
+            });
+        let (out, err) = match log.and_then(|f| Some((f.try_clone().ok()?, f))) {
+            Some((a, b)) => (Stdio::from(a), Stdio::from(b)),
+            None => (Stdio::null(), Stdio::null()),
+        };
+        match Command::new(exe)
+            .arg("run")
+            .stdin(Stdio::null())
+            .stdout(out)
+            .stderr(err)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+        {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: could not start in the background: {}", e.kind());
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
 pub fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -54,6 +103,10 @@ pub fn now_unix() -> u64 {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(windows)]
+    if args.is_empty() && std::env::var_os("REMOTEMUSICRP_FOREGROUND").is_none() {
+        return windows_background::relaunch_hidden();
+    }
     match real_main(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
