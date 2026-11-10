@@ -140,6 +140,13 @@
           <dt>{t('settings.public_origin')}</dt>
           <dd class="mono">{s.public_origin}</dd>
         {/if}
+        {#if s.lan_access}
+          <dt>{t('settings.lan_access')}</dt>
+          <dd>
+            {#if s.lan_url}<span class="mono">{s.lan_url}</span><br />{/if}
+            <span class="muted small">{t('settings.lan_note')}</span>
+          </dd>
+        {/if}
         <dt>{t('settings.poll')}</dt>
         <dd>{t('settings.seconds', { n: s.poll_interval_secs })}</dd>
         <dt>{t('settings.retention')}</dt>

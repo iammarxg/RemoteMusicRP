@@ -70,8 +70,31 @@ pub struct Config {
     pub log_retention_days: u32,
     pub update_check: bool,
     /// Public https origin when served behind a TLS reverse proxy
-    /// (required for non-loopback binds), e.g. `https://sa.example.com`.
+    /// (required for non-loopback binds unless `lan_access`), e.g.
+    /// `https://sa.example.com`.
     pub public_origin: Option<String>,
+    /// Plain-HTTP access from the local network (owner decision
+    /// 2026-11-10): listens on all interfaces, but only answers clients
+    /// with private/LAN addresses and Host names that are private IPs or
+    /// local names. Traffic is NOT encrypted.
+    pub lan_access: bool,
+}
+
+/// True for addresses that can only be on the same local network:
+/// loopback, private IPv4 (RFC 1918), IPv4 link-local, IPv6 unique-local
+/// (fc00::/7) and link-local (fe80::/10), including IPv4-mapped IPv6.
+pub fn is_lan_ip(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_lan_ip(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            v6.is_loopback() || (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+    }
 }
 
 impl Config {
@@ -100,6 +123,7 @@ struct RawConfig {
     activity_log: Option<RawActivityLog>,
     updates: Option<RawUpdates>,
     public_origin: Option<String>,
+    lan_access: Option<bool>,
     discord: Option<RawDiscord>,
 }
 
@@ -338,11 +362,29 @@ pub fn load(
         Some(o) => Some(validate_origin(o.trim())?),
         None => None,
     };
-    if !bind.ip().is_loopback() && public_origin.is_none() {
+    let lan_access = match env_var("REMOTEMUSICRP_LAN_ACCESS") {
+        Some(v) => parse_bool_env("REMOTEMUSICRP_LAN_ACCESS", &v)?,
+        None => raw.lan_access.unwrap_or(false),
+    };
+    if lan_access && public_origin.is_some() {
+        return Err(invalid(
+            "lan_access",
+            "can't be combined with public_origin: use one or the other",
+        ));
+    }
+    // LAN access on the default local address: listen on every interface
+    // (same port). The web layer then only answers LAN clients.
+    let bind = if lan_access && bind.ip().is_loopback() {
+        SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), bind.port())
+    } else {
+        bind
+    };
+    if !bind.ip().is_loopback() && public_origin.is_none() && !lan_access {
         return Err(invalid(
             "public_origin",
             "required when bind is not a loopback address: put RemoteMusicRP behind a TLS reverse proxy \
-             and set public_origin = \"https://your.host\"",
+             and set public_origin = \"https://your.host\", or set lan_access = true for plain-HTTP \
+             access from your local network only",
         ));
     }
 
@@ -375,6 +417,7 @@ pub fn load(
     Ok(Config {
         discord_mode,
         public_origin,
+        lan_access,
         bind,
         data_dir,
         poll_interval_secs,
@@ -403,10 +446,68 @@ mod tests {
     const BASE: &[(&str, &str)] = &[("REMOTEMUSICRP_DATA_DIR", "/data")];
 
     #[test]
+    fn lan_access() {
+        // Off by default.
+        assert!(!load(None, env_with(BASE)).unwrap().lan_access);
+        // On: listens on every interface, same port; counts as exposed (so
+        // a password is required).
+        let c = load(Some("data_dir = \"/d\"\nlan_access = true"), |_| None).unwrap();
+        assert!(c.lan_access && c.is_exposed());
+        assert_eq!(c.bind.to_string(), "0.0.0.0:8484");
+        let c = load(
+            Some("data_dir = \"/d\"\nbind = \"127.0.0.1:9000\""),
+            env_with(&[("REMOTEMUSICRP_LAN_ACCESS", "1")]),
+        )
+        .unwrap();
+        assert_eq!(c.bind.to_string(), "0.0.0.0:9000");
+        // Not together with the TLS proxy setting.
+        assert!(
+            load(
+                Some("data_dir = \"/d\"\nlan_access = true\npublic_origin = \"https://x.example\""),
+                |_| None
+            )
+            .is_err()
+        );
+        // A non-loopback bind still needs one of the two.
+        assert!(load(Some("data_dir = \"/d\"\nbind = \"0.0.0.0:8484\""), |_| None).is_err());
+    }
+
+    #[test]
+    fn lan_ips() {
+        let lan = |s: &str| is_lan_ip(s.parse().unwrap());
+        for ok in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.9",
+            "172.31.255.1",
+            "192.168.1.20",
+            "169.254.3.4",
+            "::1",
+            "fd12:3456::1",
+            "fe80::1",
+            "::ffff:192.168.1.5",
+        ] {
+            assert!(lan(ok), "{ok} should be LAN");
+        }
+        for bad in [
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.64.0.1",
+            "1.1.1.1",
+            "2001:db8::1",
+            "2606:4700::1111",
+            "::ffff:8.8.8.8",
+        ] {
+            assert!(!lan(bad), "{bad} should not be LAN");
+        }
+    }
+
+    #[test]
     fn defaults_are_safe() {
         let c = load(None, env_with(BASE)).unwrap();
         assert_eq!(c.bind.to_string(), DEFAULT_BIND);
         assert!(!c.is_exposed());
+        assert!(!c.lan_access);
         assert_eq!(c.poll_interval_secs, 5);
         assert_eq!(c.key_store, KeyStoreConfig::Os);
         assert!(c.artwork.apple && c.artwork.cover_art_archive && c.artwork.apple_first);

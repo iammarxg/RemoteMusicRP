@@ -8,6 +8,10 @@
 bind = "127.0.0.1:8484"
 # public_origin = "https://remotemusicrp.example.com"
 
+# Or, for plain-HTTP access from your local network only (not encrypted;
+# only on a network you trust). Can't be combined with public_origin.
+# lan_access = true
+
 data_dir = "/var/lib/remotemusicrp/data"
 
 # The master key lives in a 0600 file outside the data directory.

@@ -302,7 +302,11 @@ pub async fn setup_password(
             "a password is already set; change it under Security",
         ));
     }
-    if app.cfg.is_exposed() {
+    // A reachable install needs the setup code from the log, except when the
+    // request comes from this computer itself (whoever sits at it already
+    // controls the app). `ctx.ip` is the real client: behind the TLS proxy it
+    // comes from X-Forwarded-For, so proxied visitors still need the code.
+    if app.cfg.is_exposed() && !ctx.ip.is_loopback() {
         throttle_check(&app, &ctx)?;
         let expected = app
             .setup_code

@@ -112,6 +112,33 @@ fn allowed_hosts(app: &App) -> Vec<String> {
     hosts
 }
 
+/// LAN mode: a Host header naming this machine on the local network: a
+/// private/LAN IP literal or a local name (`.local`, `.lan`, `.home.arpa`,
+/// `.internal`) with our port. Public names are still refused, which keeps
+/// DNS-rebinding protection (an attacker's domain never matches).
+fn lan_host_ok(host: &str, port: u16) -> bool {
+    let (name, host_port) = match host.rsplit_once(':') {
+        // IPv6 literal without a port, e.g. "[fe80::1]".
+        _ if host.ends_with(']') => (host, None),
+        Some((n, p)) => (n, p.parse::<u16>().ok()),
+        None => (host, None),
+    };
+    if host_port.unwrap_or(80) != port {
+        return false;
+    }
+    let bare = name.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        return remotemusicrp_core::config::is_lan_ip(ip);
+    }
+    let local_suffix = [".local", ".lan", ".home.arpa", ".internal"]
+        .iter()
+        .any(|s| bare.ends_with(s) && bare.len() > s.len());
+    local_suffix
+        && bare
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+}
+
 /// Origins allowed to make state-changing requests.
 fn allowed_origins(app: &App) -> Vec<String> {
     let mut v: Vec<String> = loopback_hosts(app)
@@ -131,7 +158,19 @@ async fn guard_requests(State(app): State<Arc<App>>, req: Request, next: Next) -
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let host = host.to_ascii_lowercase();
-    if !allowed_hosts(&app).contains(&host) {
+    // LAN mode: only machines on the local network may talk to us at all.
+    if app.cfg.lan_access {
+        let peer = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|c| c.0.ip());
+        if !peer.is_some_and(remotemusicrp_core::config::is_lan_ip) {
+            return ApiError::forbidden("only devices on the local network may connect")
+                .into_response();
+        }
+    }
+    let lan_host = app.cfg.lan_access && lan_host_ok(&host, app.cfg.bind.port());
+    if !lan_host && !allowed_hosts(&app).contains(&host) {
         return ApiError::new(StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response();
     }
     let safe = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
@@ -141,9 +180,12 @@ async fn guard_requests(State(app): State<Arc<App>>, req: Request, next: Next) -
             .get(header::ORIGIN)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if !allowed_origins(&app)
-            .iter()
-            .any(|o| o.eq_ignore_ascii_case(origin))
+        // LAN mode: the page must come from the same LAN address it posts to.
+        let same_lan_origin = lan_host && origin.eq_ignore_ascii_case(&format!("http://{host}"));
+        if !same_lan_origin
+            && !allowed_origins(&app)
+                .iter()
+                .any(|o| o.eq_ignore_ascii_case(origin))
         {
             return ApiError::forbidden("cross-origin request blocked").into_response();
         }
@@ -259,6 +301,18 @@ pub fn router(app: Arc<App>) -> Router {
         .with_state(app)
 }
 
+/// This machine's main LAN address, for the log. A UDP "connect" only asks
+/// the OS which interface would be used; no packet is sent. The address is
+/// from TEST-NET-1 (RFC 5737), which is never routed.
+pub fn primary_lan_ip() -> Option<std::net::IpAddr> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("192.0.2.1:9").ok()?;
+    let ip = s.local_addr().ok()?.ip();
+    remotemusicrp_core::config::is_lan_ip(ip)
+        .then_some(ip)
+        .filter(|ip| !ip.is_loopback())
+}
+
 pub async fn serve(app: Arc<App>, mut shutdown: watch::Receiver<bool>) -> Result<(), String> {
     // Retry briefly: after an update the old process may still hold the port.
     let mut attempt = 0;
@@ -272,12 +326,24 @@ pub async fn serve(app: Arc<App>, mut shutdown: watch::Receiver<bool>) -> Result
             Err(e) => return Err(format!("cannot listen on {}: {}", app.cfg.bind, e.kind())),
         }
     };
+    let port = app.cfg.bind.port();
     let url = app
         .cfg
         .public_origin
         .clone()
-        .unwrap_or_else(|| format!("http://127.0.0.1:{}", app.cfg.bind.port()));
+        .unwrap_or_else(|| format!("http://127.0.0.1:{port}"));
     tracing::info!(%url, "web UI listening");
+    if app.cfg.lan_access {
+        match primary_lan_ip() {
+            Some(ip) => tracing::warn!(
+                url = %format!("http://{ip}:{port}"),
+                "LAN access is on: the web UI is reachable from your local network over plain HTTP (not encrypted)"
+            ),
+            None => tracing::warn!(
+                "LAN access is on: the web UI is reachable from your local network over plain HTTP (not encrypted)"
+            ),
+        }
+    }
     axum::serve(
         listener,
         router(app).into_make_service_with_connect_info::<SocketAddr>(),
@@ -287,4 +353,37 @@ pub async fn serve(app: Arc<App>, mut shutdown: watch::Receiver<bool>) -> Result
     })
     .await
     .map_err(|e| format!("web server: {}", e.kind()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lan_host_ok;
+
+    #[test]
+    fn lan_hosts() {
+        for ok in [
+            "192.168.1.20:8484",
+            "10.0.0.5:8484",
+            "[fe80::1]:8484",
+            "[fd00::2]:8484",
+            "mypc.local:8484",
+            "nas.lan:8484",
+            "box.home.arpa:8484",
+        ] {
+            assert!(lan_host_ok(ok, 8484), "{ok} should be accepted");
+        }
+        for bad in [
+            "8.8.8.8:8484",      // public IP
+            "evil.example:8484", // DNS rebinding: attacker's domain
+            "192.168.1.20:9999", // wrong port
+            "192.168.1.20",      // no port means 80, not ours
+            ".local:8484",       // empty name
+            "my_pc.local:8484",  // invalid characters
+            "attacker.com.local.evil.com:8484",
+        ] {
+            assert!(!lan_host_ok(bad, 8484), "{bad} should be refused");
+        }
+        // Port 80: the port may be left out.
+        assert!(lan_host_ok("192.168.1.20", 80));
+    }
 }

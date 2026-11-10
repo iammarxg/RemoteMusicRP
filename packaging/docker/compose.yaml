@@ -25,7 +25,11 @@ services:
       - ./libdiscord_partner_sdk.so:/sdk/libdiscord_partner_sdk.so:ro
 
     # --- Option A: local only (Linux). The UI is at http://127.0.0.1:8484
-    # on this machine and nowhere else.
+    # on this machine and nowhere else. To also open it from other devices on
+    # your home network over plain HTTP (not encrypted), add
+    #   environment:
+    #     REMOTEMUSICRP_LAN_ACCESS: "1"
+    # LAN access needs host networking like this; never use it with ports:.
     network_mode: host
 
     # --- Option B: reachable from anywhere through Caddy (HTTPS).

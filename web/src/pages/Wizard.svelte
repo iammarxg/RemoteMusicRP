@@ -12,7 +12,9 @@
 
   // Start at the first unfinished step.
   function firstStep(b) {
-    if (!b.setup.password_set && !b.setup.password_skipped) return 0;
+    // A reachable install must set a password even if it was skipped
+    // earlier (when the UI was still local only).
+    if (b.needs_password || (!b.setup.password_set && !b.setup.password_skipped)) return 0;
     if (!b.setup.discord_configured) return 1;
     if (!b.setup.lastfm_connected) return 2;
     return 3;

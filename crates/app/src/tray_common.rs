@@ -3,11 +3,12 @@
 
 use crate::app::App;
 
-/// Whether to show a tray: desktop installs bound to localhost only, unless
+/// Whether to show a tray: desktop installs (localhost or LAN access), unless
 /// disabled with `--no-tray` / `REMOTEMUSICRP_NO_TRAY=1`. Never for package
 /// or Docker installs (those are services without a desktop).
 pub fn wanted(app: &App, args: &[String]) -> bool {
-    !app.cfg.is_exposed()
+    // LAN access is still a desktop install; internet exposure isn't.
+    (!app.cfg.is_exposed() || app.cfg.lan_access)
         && !args.iter().any(|a| a == "--no-tray")
         && std::env::var("REMOTEMUSICRP_NO_TRAY")
             .map(|v| v != "1")

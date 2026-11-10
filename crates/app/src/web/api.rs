@@ -42,6 +42,7 @@ pub async fn state(
     };
     let required = auth_required(&app);
     let authenticated = session.authenticated || !required;
+    let needs_password = app.cfg.is_exposed() && settings::password_hash(&app.db).is_none();
     let locked = app.is_locked();
     let lastfm = app
         .db
@@ -55,7 +56,13 @@ pub async fn state(
         "locked": locked,
         "exposed": app.cfg.is_exposed(),
         "discord_mode": if app.sdk.is_some() { "social_sdk" } else { "local_rpc" },
-        "needs_setup_code": app.cfg.is_exposed() && settings::password_hash(&app.db).is_none(),
+        // Reachable install without a password: one must be set first. From
+        // this computer no code is needed; from another device the page says
+        // to finish setup on this computer (or use the setup code).
+        "needs_password": needs_password,
+        "setup_here": needs_password && ctx.ip.is_loopback(),
+        "needs_setup_code": needs_password && !ctx.ip.is_loopback(),
+        "local_url": format!("http://127.0.0.1:{}", app.cfg.bind.port()),
         "setup": {
             "password_set": settings::password_hash(&app.db).is_some(),
             "password_skipped": settings::get_bool(&app.db, settings::PASSWORD_SKIPPED),
@@ -496,6 +503,12 @@ pub async fn instance_settings(
         "bind": c.bind.to_string(),
         "public_origin": c.public_origin,
         "exposed": c.is_exposed(),
+        "lan_access": c.lan_access,
+        "lan_url": c
+            .lan_access
+            .then(super::primary_lan_ip)
+            .flatten()
+            .map(|ip| format!("http://{}", std::net::SocketAddr::new(ip, c.bind.port()))),
         "poll_interval_secs": c.poll_interval_secs,
         "log_retention_days": c.log_retention_days,
         "update_check": c.update_check,

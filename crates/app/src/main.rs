@@ -295,7 +295,11 @@ fn run(cfg: Config, args: &[String]) -> Result<(), String> {
             .take(12)
             .collect();
         // Shown only on the server's own console/log, never in the UI.
-        eprintln!("\n  First-time setup code (needed to set the admin password): {code}\n");
+        eprintln!(
+            "\n  Set an admin password: open http://127.0.0.1:{port} on this computer.\n  \
+             No browser here? Use this one-time setup code from another device: {code}\n",
+            port = app.cfg.bind.port()
+        );
         *app.setup_code.lock().map_err(|_| "lock")? = Some(code);
     }
     updater::startup_rollback_check(&app)?;

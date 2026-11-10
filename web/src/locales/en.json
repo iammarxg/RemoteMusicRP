@@ -57,6 +57,17 @@
     "submit": "Log in",
     "forgot": "Forgot your password? On the machine running RemoteMusicRP, run: remotemusicrp reset-password"
   },
+  "elsewhere": {
+    "title": "Finish setup on the other computer",
+    "body": "RemoteMusicRP doesn't have a password yet. For safety, the first password is set on the computer it runs on.",
+    "step_open": "On the computer running RemoteMusicRP, click its tray icon, or open:",
+    "step_open_hint": "This address only works on that computer.",
+    "step_password": "Choose a password there.",
+    "waiting": "This page moves on to the login by itself once that's done.",
+    "headless_title": "No screen on that computer?",
+    "headless_body": "For a server or NAS, use the one-time setup code printed in its log when RemoteMusicRP started.",
+    "use_code": "Set up from here with a setup code"
+  },
   "wizard": {
     "title": "Set up RemoteMusicRP",
     "intro": "Three short steps. Everything you enter stays on this machine.",
@@ -67,7 +78,7 @@
     "password_body": "Set a password for this page. Without one, any program on this computer can open it.",
     "password_required": "This page is reachable from other machines, so a password is required.",
     "setup_code": "Setup code",
-    "setup_code_hint": "Printed in the server's log when RemoteMusicRP started.",
+    "setup_code_hint": "Printed in the log when RemoteMusicRP started (on Windows: %LOCALAPPDATA%\\RemoteMusicRP\\desktop.log).",
     "password": "Password",
     "password_hint": "At least 12 characters.",
     "password_confirm": "Repeat password",
@@ -240,6 +251,8 @@
     "intro": "Appearance, updates, email alerts and backups for this instance.",
     "bind": "Web address",
     "public_origin": "Public address",
+    "lan_access": "Local network address",
+    "lan_note": "Open this from any device on your network. The connection isn't encrypted, so only use it on a network you trust.",
     "poll": "Check Last.fm every",
     "seconds": "{n} seconds",
     "retention": "Keep activity log for",

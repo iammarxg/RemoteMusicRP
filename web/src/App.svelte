@@ -11,6 +11,7 @@
   import ThemeSwitch from './components/ThemeSwitch.svelte';
   import Unlock from './pages/Unlock.svelte';
   import Login from './pages/Login.svelte';
+  import SetupElsewhere from './pages/SetupElsewhere.svelte';
   import Wizard from './pages/Wizard.svelte';
   import Dashboard from './pages/Dashboard.svelte';
   import Presence from './pages/Presence.svelte';
@@ -35,6 +36,8 @@
 
   let failed = $state(false);
   let menuOpen = $state(false);
+  // Another device chose to set the first password with the setup code.
+  let useSetupCode = $state(false);
 
   async function refresh() {
     try {
@@ -82,7 +85,22 @@
   let Page = $derived(pages[app.route] ?? Dashboard);
   let b = $derived(app.boot);
   let mode = $derived(
-    !b ? 'loading' : b.locked ? 'locked' : !b.authenticated ? 'login' : !b.setup.complete ? 'wizard' : 'app',
+    !b
+      ? 'loading'
+      : b.locked
+        ? 'locked'
+        : !b.authenticated
+          ? // Reachable install without a password yet: set one first. On
+            // this computer that's the wizard's first step; from another
+            // device, a page saying where to do it (or the setup code).
+            b.needs_password
+            ? b.setup_here || useSetupCode
+              ? 'wizard'
+              : 'elsewhere'
+            : 'login'
+          : !b.setup.complete
+            ? 'wizard'
+            : 'app',
   );
 
   async function logout() {
@@ -108,6 +126,8 @@
   <Unlock onDone={refresh} />
 {:else if mode === 'login'}
   <Login onDone={refresh} />
+{:else if mode === 'elsewhere'}
+  <SetupElsewhere boot={b} onRefresh={refresh} onUseCode={() => (useSetupCode = true)} />
 {:else if mode === 'wizard'}
   <Wizard boot={b} onChange={refresh} />
 {:else}
