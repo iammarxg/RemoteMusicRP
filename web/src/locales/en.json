@@ -274,6 +274,7 @@
     "available": "Version {v} is available.",
     "security": "Version {v} is available and includes security fixes. Update soon.",
     "up_to_date": "You're up to date.",
+    "check_failed": "Couldn't check for updates right now.",
     "never_checked": "Not checked yet.",
     "checked": "Checked {time}.",
     "check": "Check now",

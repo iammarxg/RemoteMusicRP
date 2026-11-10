@@ -95,6 +95,7 @@
       <p>
         {#if i.available && i.security}<strong>{t('updates.security', { v: i.latest })}</strong>
         {:else if i.available}{t('updates.available', { v: i.latest })}
+        {:else if i.error}{t('updates.check_failed')}
         {:else if i.checked_at}{t('updates.up_to_date')}
         {:else}{t('updates.current', { v: i.current })}{/if}
       </p>

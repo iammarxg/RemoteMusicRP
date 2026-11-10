@@ -27,6 +27,12 @@ use crate::app::App;
 use crate::{now_unix, settings};
 
 const RELEASES_API: &str = "https://api.github.com/repos/iammarxg/RemoteMusicRP/releases/latest";
+/// GitHub's documented "latest release" link: redirects to
+/// `/releases/tag/<tag>`. Not subject to the API's 60-requests-per-hour
+/// limit for anonymous clients, so it's the fallback when that is used up.
+const RELEASES_LATEST_PAGE: &str = "https://github.com/iammarxg/RemoteMusicRP/releases/latest";
+const RELEASES_TAG_PREFIX: &str = "https://github.com/iammarxg/RemoteMusicRP/releases/tag/";
+const DOWNLOAD_PREFIX: &str = "https://github.com/iammarxg/RemoteMusicRP/releases/download/";
 const CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
 const FIRST_CHECK_AFTER: Duration = Duration::from_secs(90);
 const MAX_BINARY: usize = 64 * 1024 * 1024;
@@ -137,7 +143,6 @@ pub struct UpdateInfo {
 #[derive(Debug, Deserialize)]
 struct Release {
     tag_name: String,
-    html_url: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -146,14 +151,6 @@ struct Release {
     draft: bool,
     #[serde(default)]
     prerelease: bool,
-    #[serde(default)]
-    assets: Vec<Asset>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct Asset {
-    name: String,
-    browser_download_url: String,
 }
 
 /// Parse "v1.2.3" / "1.2.3" into a comparable tuple.
@@ -200,51 +197,121 @@ pub fn initial_info() -> UpdateInfo {
     base_info()
 }
 
-async fn fetch_release(app: &App) -> Result<Release, String> {
+/// The newest published release, from whichever source answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Latest {
+    /// Tag, e.g. `v0.1.2` (validated: `v` + a parseable version).
+    tag: String,
+    /// `[security]` in the release notes. `None` when only the tag is
+    /// known (the redirect fallback can't see the notes).
+    security: Option<bool>,
+}
+
+/// Why the API didn't answer, so we know whether to fall back.
+enum ApiFailure {
+    NoReleases,
+    /// Rate limit (403/429) or any other non-success answer or network
+    /// error: the redirect may still work.
+    Other(String),
+}
+
+async fn latest_from_api(app: &App) -> Result<Latest, ApiFailure> {
     let resp = app
         .http
         .get(RELEASES_API)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|e| remotemusicrp_providers::http::redact(&e))?;
-    if resp.status().as_u16() == 404 {
-        return Err("no releases published yet".into());
+        .map_err(|e| ApiFailure::Other(remotemusicrp_providers::http::redact(&e)))?;
+    let status = resp.status().as_u16();
+    if status == 404 {
+        return Err(ApiFailure::NoReleases);
     }
     if !resp.status().is_success() {
-        return Err(format!("GitHub returned HTTP {}", resp.status().as_u16()));
+        let limited = matches!(status, 403 | 429)
+            && resp
+                .headers()
+                .get("x-ratelimit-remaining")
+                .is_some_and(|v| v.as_bytes() == b"0");
+        return Err(ApiFailure::Other(if limited {
+            "GitHub's hourly limit for update checks is used up".into()
+        } else {
+            format!("GitHub returned HTTP {status}")
+        }));
     }
-    remotemusicrp_providers::http::json_limited::<Release>(resp)
+    let r = remotemusicrp_providers::http::json_limited::<Release>(resp)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| ApiFailure::Other(e.to_string()))?;
+    // /releases/latest never returns drafts or pre-releases; check anyway.
+    if r.draft || r.prerelease {
+        return Err(ApiFailure::NoReleases);
+    }
+    let tag = valid_tag(&r.tag_name).ok_or_else(|| ApiFailure::Other("bad release tag".into()))?;
+    let text = format!(
+        "{} {}",
+        r.name.as_deref().unwrap_or(""),
+        r.body.as_deref().unwrap_or("")
+    )
+    .to_ascii_lowercase();
+    Ok(Latest {
+        tag,
+        security: Some(text.contains("[security]")),
+    })
+}
+
+/// `v1.2.3` style tags only (what our release workflow creates).
+fn valid_tag(tag: &str) -> Option<String> {
+    let t = tag.trim();
+    (t.starts_with('v') && t.len() <= 32 && parse_version(t).is_some()).then(|| t.to_owned())
+}
+
+/// The tag from the final address of GitHub's "latest release" link, e.g.
+/// `https://github.com/<repo>/releases/tag/v0.1.2` → `v0.1.2`.
+fn tag_from_latest_url(url: &str) -> Option<String> {
+    let tag = url.strip_prefix(RELEASES_TAG_PREFIX)?;
+    valid_tag(tag).filter(|t| !t.contains(['/', '?', '#']))
+}
+
+/// Fallback: follow the "latest release" link with a HEAD request (no page
+/// body is downloaded or read) and take the tag from where it ends up.
+async fn latest_from_redirect(app: &App) -> Result<Latest, String> {
+    let resp = app
+        .http
+        .head(RELEASES_LATEST_PAGE)
+        .send()
+        .await
+        .map_err(|e| remotemusicrp_providers::http::redact(&e))?;
+    let tag = tag_from_latest_url(resp.url().as_str())
+        .ok_or_else(|| "no releases published yet".to_owned())?;
+    Ok(Latest {
+        tag,
+        security: None,
+    })
+}
+
+async fn fetch_latest(app: &App) -> Result<Latest, String> {
+    match latest_from_api(app).await {
+        Ok(l) => Ok(l),
+        Err(ApiFailure::NoReleases) => Err("no releases published yet".into()),
+        Err(ApiFailure::Other(api_err)) => latest_from_redirect(app).await.map_err(|e| {
+            format!("couldn't check for updates ({api_err}; {e}); it will try again later")
+        }),
+    }
 }
 
 /// Check GitHub for a newer release and update `app.update`.
 pub async fn check(app: &App) -> UpdateInfo {
-    let result = fetch_release(app).await;
+    let result = fetch_latest(app).await;
     set_info(app, |u| {
         u.checked_at = Some(now_unix());
         match result {
-            Ok(r) if !r.draft && !r.prerelease => {
-                let text = format!(
-                    "{} {}",
-                    r.name.as_deref().unwrap_or(""),
-                    r.body.as_deref().unwrap_or("")
-                )
-                .to_ascii_lowercase();
-                u.available = is_newer(&r.tag_name, &u.current);
-                u.security = u.available && text.contains("[security]");
-                u.latest = Some(
-                    r.tag_name
-                        .trim_start_matches('v')
-                        .chars()
-                        .take(32)
-                        .collect(),
-                );
-                u.notes_url = r.html_url.filter(|h| h.starts_with("https://github.com/"));
+            Ok(l) => {
+                u.available = is_newer(&l.tag, &u.current);
+                u.security = u.available && l.security.unwrap_or(false);
+                u.latest = Some(l.tag.trim_start_matches('v').to_owned());
+                u.notes_url = Some(format!("{RELEASES_TAG_PREFIX}{}", l.tag));
                 u.error = None;
             }
-            Ok(_) => u.error = None,
             Err(e) => u.error = Some(e),
         }
     });
@@ -252,7 +319,7 @@ pub async fn check(app: &App) -> UpdateInfo {
 }
 
 async fn download(app: &App, url: &str, limit: usize) -> Result<Vec<u8>, String> {
-    if !url.starts_with("https://github.com/iammarxg/RemoteMusicRP/releases/download/") {
+    if !url.starts_with(DOWNLOAD_PREFIX) {
         return Err("unexpected download location".into());
     }
     let mut resp = app
@@ -341,34 +408,19 @@ pub async fn install(app: &Arc<App>, stop: &watch::Sender<bool>) -> Result<Strin
     }
     set_info(app, |u| u.installing = true);
     let result = async {
-        let release = fetch_release(app).await?;
-        let version = release.tag_name.trim_start_matches('v').to_owned();
+        let latest = fetch_latest(app).await?;
+        let version = latest.tag.trim_start_matches('v').to_owned();
         if !is_newer(&version, env!("CARGO_PKG_VERSION")) {
             return Err("already up to date".to_owned());
         }
-        let asset = |name: &str| {
-            release
-                .assets
-                .iter()
-                .find(|a| a.name == name)
-                .cloned()
-                .ok_or_else(|| format!("release is missing {name}"))
-        };
+        // Release file names are fixed by our release workflow, so the
+        // download addresses follow from the tag (no API call needed).
+        let url = |file: &str| format!("{DOWNLOAD_PREFIX}{}/{file}", latest.tag);
         let name = asset_name();
-        let bin = download(app, &asset(&name)?.browser_download_url, MAX_BINARY).await?;
-        let bin_sig = download(
-            app,
-            &asset(&format!("{name}.minisig"))?.browser_download_url,
-            MAX_TEXT,
-        )
-        .await?;
-        let sums = download(app, &asset("SHA256SUMS")?.browser_download_url, MAX_TEXT).await?;
-        let sums_sig = download(
-            app,
-            &asset("SHA256SUMS.minisig")?.browser_download_url,
-            MAX_TEXT,
-        )
-        .await?;
+        let bin = download(app, &url(&name), MAX_BINARY).await?;
+        let bin_sig = download(app, &url(&format!("{name}.minisig")), MAX_TEXT).await?;
+        let sums = download(app, &url("SHA256SUMS"), MAX_TEXT).await?;
+        let sums_sig = download(app, &url("SHA256SUMS.minisig"), MAX_TEXT).await?;
         verify_update(
             pubkey,
             &version,
@@ -547,6 +599,30 @@ mod tests {
     #[test]
     fn install_kind_default() {
         assert_eq!(install_kind(), "portable");
+    }
+
+    #[test]
+    fn tags_from_latest_redirect() {
+        let p = RELEASES_TAG_PREFIX;
+        assert_eq!(
+            tag_from_latest_url(&format!("{p}v0.1.2")).as_deref(),
+            Some("v0.1.2")
+        );
+        // No release yet: GitHub redirects to the releases list instead.
+        assert_eq!(
+            tag_from_latest_url("https://github.com/iammarxg/RemoteMusicRP/releases"),
+            None
+        );
+        // Anything but our repo's tag page, or an odd tag, is refused.
+        for bad in [
+            "https://github.com/someone-else/RemoteMusicRP/releases/tag/v9.9.9".to_owned(),
+            format!("{p}latest"),
+            format!("{p}v1.2"),
+            format!("{p}v1.2.3/../../x"),
+            format!("{p}1.2.3"),
+        ] {
+            assert_eq!(tag_from_latest_url(&bad), None, "{bad}");
+        }
     }
 
     #[test]
