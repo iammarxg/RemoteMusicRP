@@ -2334,7 +2334,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "remotemusicrp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "base64",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "remotemusicrp-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jiff",
  "remotemusicrp-discord",
@@ -2375,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "remotemusicrp-crypto"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -2393,11 +2393,11 @@ dependencies = [
 
 [[package]]
 name = "remotemusicrp-desktop"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "remotemusicrp-discord"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "getrandom 0.4.3",
  "serde",
@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "remotemusicrp-discord-sdk-ffi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libloading",
  "remotemusicrp-discord",
@@ -2420,7 +2420,7 @@ dependencies = [
 
 [[package]]
 name = "remotemusicrp-providers"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "reqwest",
  "rustls",
@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "remotemusicrp-storage"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "remotemusicrp-crypto",
  "rusqlite",
