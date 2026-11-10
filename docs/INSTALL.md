@@ -289,16 +289,37 @@ You stay signed in after restarts. Only an encrypted renewal token is kept.
 By default the web UI only answers on the same computer (`127.0.0.1`). To
 open it from elsewhere:
 
-- **Easiest and safest:** an SSH tunnel (see section 5).
-- **Always on:** put a TLS reverse proxy in front. Examples ship in
-  `examples/`: [Caddy](../packaging/examples/Caddyfile) (automatic
+- **From your phone or another PC at home (LAN access):** add
+  `lan_access = true` to the config file (or set
+  `REMOTEMUSICRP_LAN_ACCESS=1`) and restart. The web UI is then also at
+  `http://<this computer's LAN address>:8484`, for example
+  `http://192.168.1.20:8484`. The address is shown in the log and under
+  Settings → Instance.
+  - **Not encrypted:** your password and login travel as plain HTTP. Only
+    use this on a network you trust (your home Wi-Fi, not a café or shared
+    network).
+  - Only devices with local-network addresses can connect (192.168.x.x,
+    10.x.x.x, 172.16–31.x.x and the IPv6 equivalents). Open it by IP
+    address or a local name such as `mypc.local`.
+  - **Windows** asks whether to allow RemoteMusicRP through the firewall the
+    first time: allow it on **private** networks.
+  - **Docker:** only use LAN access with host networking (option A). With
+    Docker's default bridge networking every visitor appears to come from a
+    local address, so the LAN-only check can't protect you.
+- **Easiest and safest from anywhere:** an SSH tunnel (see section 5).
+- **Always on, encrypted:** put a TLS reverse proxy in front. Examples ship
+  in `examples/`: [Caddy](../packaging/examples/Caddyfile) (automatic
   certificates) and [nginx](../packaging/examples/nginx.conf). Then set
-  `public_origin = "https://your.domain"` in the config. RemoteMusicRP
-  refuses to listen on a non-local address without it.
+  `public_origin = "https://your.domain"` in the config. (This and
+  `lan_access` can't be combined.)
 
 An admin password is required as soon as the UI is reachable from another
-computer. The first password needs a one-time setup code, which is printed in
-the server log.
+computer. **Set it on the computer running RemoteMusicRP**: open
+`http://127.0.0.1:8484` there (or click the tray icon) and choose a password;
+no code needed. Other devices show "Finish setup on the other computer"
+until then, and move on to the login by themselves. On a server with no
+screen, use the one-time setup code printed in its log instead (or an SSH
+tunnel, which counts as "on this computer").
 
 ## 9. Updates
 
