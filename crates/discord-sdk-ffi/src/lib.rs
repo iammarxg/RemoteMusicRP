@@ -615,7 +615,9 @@ impl<'a> ActivityBuilder<'a> {
         // SAFETY: initialises a fresh Activity in our stack slot.
         unsafe { (api.activity_init)(&raw mut activity) };
         let mut b = Self { api, activity };
-        b.fill(a);
+        // Same limits as the local RPC path: Discord rejects the whole
+        // status if any one field is out of range.
+        b.fill(&a.sanitized());
         b
     }
 

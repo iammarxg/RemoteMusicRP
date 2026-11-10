@@ -99,83 +99,134 @@ fn valid_image(s: &str) -> bool {
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
+/// Length of a URL as Discord sees it: anything that isn't printable ASCII
+/// is percent-encoded (each UTF-8 byte becomes `%XX`, 3 characters). A
+/// Last.fm link to a title in an unusual script can be under 256 bytes raw
+/// but far over 256 once encoded, and Discord then rejects the whole status.
+fn encoded_len(s: &str) -> usize {
+    s.bytes()
+        .map(|b| if b.is_ascii_graphic() { 1 } else { 3 })
+        .sum()
+}
+
+fn valid_url(s: &str, max: usize) -> bool {
+    s.starts_with("https://") && !s.chars().any(char::is_whitespace) && encoded_len(s) <= max
+}
+
 fn valid_link(s: &str) -> bool {
-    s.len() <= MAX_LINK_URL && s.starts_with("https://") && !s.chars().any(char::is_whitespace)
+    valid_url(s, MAX_LINK_URL)
 }
 
 fn valid_button(b: &Button) -> bool {
     let label_len = b.label.trim().chars().count();
-    (1..=MAX_BUTTON_LABEL).contains(&label_len)
-        && b.url.len() <= MAX_BUTTON_URL
-        && b.url.starts_with("https://")
-        && !b.url.chars().any(char::is_whitespace)
+    (1..=MAX_BUTTON_LABEL).contains(&label_len) && valid_url(&b.url, MAX_BUTTON_URL)
 }
 
 impl Activity {
-    /// Serialize to the Discord activity object, dropping anything invalid
-    /// rather than sending it.
+    /// The activity with every field made to fit Discord's limits: text is
+    /// cut or padded, and links, images and buttons that Discord would
+    /// reject are left out (rather than letting Discord refuse the whole
+    /// status). Both the local RPC and the Social SDK paths send this.
+    pub fn sanitized(&self) -> Activity {
+        let details = self.details.as_deref().and_then(fit_text);
+        let state = self.state.as_deref().and_then(fit_text);
+        let large_image = self
+            .large_image
+            .as_deref()
+            .filter(|s| valid_image(s))
+            .map(str::to_owned);
+        let small_image = self
+            .small_image
+            .as_deref()
+            .filter(|s| valid_image(s))
+            .map(str::to_owned);
+        let link = |present: bool, u: &Option<String>| {
+            u.as_deref()
+                .filter(|u| present && valid_link(u))
+                .map(str::to_owned)
+        };
+        Activity {
+            kind: self.kind,
+            name: self.name.as_deref().and_then(fit_text),
+            details_url: link(details.is_some(), &self.details_url),
+            state_url: link(state.is_some(), &self.state_url),
+            large_text: large_image
+                .as_ref()
+                .and(self.large_text.as_deref().and_then(fit_text)),
+            large_url: link(large_image.is_some(), &self.large_url),
+            small_text: small_image
+                .as_ref()
+                .and(self.small_text.as_deref().and_then(fit_text)),
+            details,
+            state,
+            large_image,
+            small_image,
+            start_unix: self.start_unix,
+            end_unix: self
+                .end_unix
+                .filter(|e| self.start_unix.is_some_and(|s| *e > s)),
+            buttons: self
+                .buttons
+                .iter()
+                .filter(|b| valid_button(b))
+                .take(MAX_BUTTONS)
+                .map(|b| Button {
+                    label: b.label.trim().to_owned(),
+                    url: b.url.clone(),
+                })
+                .collect(),
+            status_display: self.status_display,
+        }
+    }
+
+    /// Serialize to the Discord activity object (local RPC), after
+    /// [`sanitized`](Self::sanitized).
     pub fn to_json(&self) -> Value {
+        let a = self.sanitized();
         let mut obj = Map::new();
-        obj.insert("type".into(), json!(self.kind as u8));
-        if let Some(n) = self.name.as_deref().and_then(fit_text) {
-            obj.insert("name".into(), json!(n));
-        }
-        if let Some(d) = self.details.as_deref().and_then(fit_text) {
-            obj.insert("details".into(), json!(d));
-            if let Some(u) = self.details_url.as_deref().filter(|u| valid_link(u)) {
-                obj.insert("details_url".into(), json!(u));
+        obj.insert("type".into(), json!(a.kind as u8));
+        fn put(m: &mut Map<String, Value>, k: &str, v: &Option<String>) {
+            if let Some(v) = v {
+                m.insert(k.into(), json!(v));
             }
         }
-        if let Some(s) = self.state.as_deref().and_then(fit_text) {
-            obj.insert("state".into(), json!(s));
-            if let Some(u) = self.state_url.as_deref().filter(|u| valid_link(u)) {
-                obj.insert("state_url".into(), json!(u));
-            }
-        }
+        put(&mut obj, "name", &a.name);
+        put(&mut obj, "details", &a.details);
+        put(&mut obj, "details_url", &a.details_url);
+        put(&mut obj, "state", &a.state);
+        put(&mut obj, "state_url", &a.state_url);
 
         let mut ts = Map::new();
-        if let Some(start) = self.start_unix {
+        if let Some(start) = a.start_unix {
             ts.insert("start".into(), json!(start));
-            if let Some(end) = self.end_unix.filter(|e| *e > start) {
-                ts.insert("end".into(), json!(end));
-            }
+        }
+        if let Some(end) = a.end_unix {
+            ts.insert("end".into(), json!(end));
         }
         if !ts.is_empty() {
             obj.insert("timestamps".into(), Value::Object(ts));
         }
 
         let mut assets = Map::new();
-        if let Some(img) = self.large_image.as_deref().filter(|s| valid_image(s)) {
-            assets.insert("large_image".into(), json!(img));
-            if let Some(t) = self.large_text.as_deref().and_then(fit_text) {
-                assets.insert("large_text".into(), json!(t));
-            }
-            if let Some(u) = self.large_url.as_deref().filter(|u| valid_link(u)) {
-                assets.insert("large_url".into(), json!(u));
-            }
-        }
-        if let Some(img) = self.small_image.as_deref().filter(|s| valid_image(s)) {
-            assets.insert("small_image".into(), json!(img));
-            if let Some(t) = self.small_text.as_deref().and_then(fit_text) {
-                assets.insert("small_text".into(), json!(t));
-            }
-        }
+        put(&mut assets, "large_image", &a.large_image);
+        put(&mut assets, "large_text", &a.large_text);
+        put(&mut assets, "large_url", &a.large_url);
+        put(&mut assets, "small_image", &a.small_image);
+        put(&mut assets, "small_text", &a.small_text);
         if !assets.is_empty() {
             obj.insert("assets".into(), Value::Object(assets));
         }
 
-        let buttons: Vec<Value> = self
-            .buttons
-            .iter()
-            .filter(|b| valid_button(b))
-            .take(MAX_BUTTONS)
-            .map(|b| json!({ "label": b.label.trim(), "url": b.url }))
-            .collect();
-        if !buttons.is_empty() {
+        if !a.buttons.is_empty() {
+            let buttons: Vec<Value> = a
+                .buttons
+                .iter()
+                .map(|b| json!({ "label": b.label, "url": b.url }))
+                .collect();
             obj.insert("buttons".into(), Value::Array(buttons));
         }
 
-        if let Some(sd) = self.status_display {
+        if let Some(sd) = a.status_display {
             obj.insert("status_display_type".into(), json!(sd as u8));
         }
         Value::Object(obj)
@@ -186,6 +237,56 @@ impl Activity {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_too_long_once_encoded_is_dropped_not_fatal() {
+        // The failing case from the live log: a title in an unusual script.
+        // Its Last.fm link is under 256 bytes raw but well over 256
+        // characters once Discord percent-encodes it.
+        let title = "⣎⡇ꉺლ༽இ•̛)ྀ◞ ༎ຶ ༽ৣৢ؞ৢ؞ؖ ꉺლ";
+        let url = format!("https://www.last.fm/music/x/_/{title}{title}");
+        assert!(url.len() <= 256, "raw bytes fit: {}", url.len());
+        assert!(encoded_len(&url) > 256);
+        let a = Activity {
+            details: Some(title.into()),
+            details_url: Some(url),
+            state: Some("Artist".into()),
+            state_url: Some("https://www.last.fm/music/Artist".into()),
+            ..Default::default()
+        };
+        let s = a.sanitized();
+        // The bad link is dropped; everything else still goes out.
+        assert_eq!(s.details.as_deref(), Some(title));
+        assert_eq!(s.details_url, None);
+        assert_eq!(
+            s.state_url.as_deref(),
+            Some("https://www.last.fm/music/Artist")
+        );
+        assert!(a.to_json().get("details_url").is_none());
+        assert_eq!(a.to_json()["details"], title);
+    }
+
+    #[test]
+    fn sanitized_matches_json_limits() {
+        // Long text is cut to 128, a link without its line is dropped, and
+        // the end time must follow the start.
+        let a = Activity {
+            name: Some("n".repeat(300)),
+            state_url: Some("https://example.com/orphan".into()),
+            start_unix: Some(50),
+            end_unix: Some(10),
+            ..full()
+        };
+        let s = Activity {
+            state: None,
+            ..a.clone()
+        }
+        .sanitized();
+        assert_eq!(s.name.as_deref().map(|n| n.chars().count()), Some(128));
+        assert_eq!(s.state_url, None);
+        assert_eq!(s.end_unix, None);
+        assert_eq!(s.buttons.len(), 2);
+    }
 
     fn full() -> Activity {
         Activity {
