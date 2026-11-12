@@ -31,6 +31,15 @@ pub enum ArtworkSourceKind {
     CoverArtArchive,
 }
 
+impl ArtworkSourceKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Apple => "Apple",
+            Self::CoverArtArchive => "Cover Art Archive",
+        }
+    }
+}
+
 /// The kind of release the artwork belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseKind {
@@ -84,6 +93,57 @@ pub struct Artwork {
     pub duration_ms: Option<u64>,
     /// Album, EP or single, when the source says.
     pub release: Option<ReleaseKind>,
+}
+
+/// What a lookup tried and why it didn't find art, for the activity log.
+/// Holds only track, artist and album names and result counts: no URLs with
+/// query strings, no keys.
+#[derive(Debug, Default, Clone)]
+pub struct Trace {
+    notes: Vec<String>,
+    /// Art was found, but for another release than the one being played.
+    pub other_release: Option<String>,
+}
+
+impl Trace {
+    const MAX_NOTES: usize = 16;
+    const MAX_NOTE_CHARS: usize = 240;
+
+    pub fn note(&mut self, note: impl Into<String>) {
+        if self.notes.len() < Self::MAX_NOTES {
+            self.notes
+                .push(note.into().chars().take(Self::MAX_NOTE_CHARS).collect());
+        }
+    }
+
+    pub fn notes(&self) -> &[String] {
+        &self.notes
+    }
+}
+
+/// Up to three Apple results, for a log note.
+fn describe_apple(resp: &AppleResponse, songs: bool) -> String {
+    let shown: Vec<String> = resp
+        .results
+        .iter()
+        .take(3)
+        .map(|r| {
+            let artist = r.artist_name.as_deref().unwrap_or("?");
+            let album = r.collection_name.as_deref().unwrap_or("?");
+            if songs {
+                format!(
+                    "\"{}\" by {artist} on \"{album}\"",
+                    r.track_name.as_deref().unwrap_or("?")
+                )
+            } else {
+                format!("\"{album}\" by {artist}")
+            }
+        })
+        .collect();
+    match resp.results.len() {
+        0 => "no results".to_owned(),
+        n => format!("{n} results, e.g. {}", shown.join("; ")),
+    }
 }
 
 pub trait ArtworkSource: Send + Sync {
@@ -159,9 +219,53 @@ fn exact_album(s: &str) -> String {
     bare.chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
+/// The individual artists in a credit ("A, B & C feat. D" → a, b, c, d).
+/// Band names with "&" split too, but the same way on both sides.
+fn artist_set(credit: &str) -> Vec<String> {
+    const SEPARATORS: &[&str] = &[
+        ", ",
+        " & ",
+        " and ",
+        " x ",
+        " × ",
+        " feat. ",
+        " feat ",
+        " ft. ",
+        " featuring ",
+        " with ",
+        " / ",
+        "; ",
+        " + ",
+    ];
+    let mut parts = vec![credit.to_lowercase()];
+    for sep in SEPARATORS {
+        parts = parts
+            .iter()
+            .flat_map(|p| p.split(sep).map(str::to_owned).collect::<Vec<_>>())
+            .collect();
+    }
+    let mut out: Vec<String> = parts
+        .iter()
+        .map(|p| normalize(p))
+        .filter(|p| !p.is_empty())
+        .collect();
+    out.dedup();
+    out
+}
+
+/// Same artist credit, allowing for different order ("A, B & C" vs
+/// "A, C & B"), extra or missing featured artists, and abbreviations.
 fn artist_matches(wanted: &str, got: &str) -> bool {
     let (w, g) = (normalize(wanted), normalize(got));
-    !w.is_empty() && (w == g || g.contains(&w) || w.contains(&g) && !g.is_empty())
+    if w.is_empty() || g.is_empty() {
+        return false;
+    }
+    if w == g || g.contains(&w) || w.contains(&g) {
+        return true;
+    }
+    let (ws, gs) = (artist_set(wanted), artist_set(got));
+    let subset = |a: &[String], b: &[String]| !a.is_empty() && a.iter().all(|x| b.contains(x));
+    subset(&ws, &gs) || subset(&gs, &ws) || ws.first().is_some_and(|m| gs.first() == Some(m))
 }
 
 // ---- Apple iTunes Search API -------------------------------------------
@@ -310,10 +414,16 @@ pub(crate) fn pick_apple_album(artist: &str, album: &str, resp: AppleResponse) -
             .collection_name
             .as_deref()
             .is_some_and(|c| normalize_album(c) == wanted);
+        // Compilations are credited to "Various Artists": accept those when
+        // the album name matches exactly (brackets included).
+        let compilation = |a: &str| {
+            normalize(a) == "variousartists"
+                && r.collection_name.as_deref().map(exact_album) == Some(exact_album(album))
+        };
         let artist_ok = r
             .artist_name
             .as_deref()
-            .is_some_and(|a| artist_matches(artist, a));
+            .is_some_and(|a| artist_matches(artist, a) || compilation(a));
         if !(album_ok && artist_ok) {
             return None;
         }
@@ -328,18 +438,16 @@ pub(crate) fn pick_apple_album(artist: &str, album: &str, resp: AppleResponse) -
 }
 
 impl AppleSearch {
-    /// Last-resort lookup: the album's cover by album + artist name.
-    pub async fn lookup_album(&self, artist: &str, album: &str) -> Result<Option<Artwork>> {
+    async fn search(&self, term: &str, entity: &str, limit: &str) -> Result<AppleResponse> {
         self.limiter.acquire().await;
-        let term = format!("{artist} {album}");
         let resp = self
             .client
             .get(&self.base)
             .query(&[
-                ("term", term.as_str()),
+                ("term", term),
                 ("media", "music"),
-                ("entity", "album"),
-                ("limit", "10"),
+                ("entity", entity),
+                ("limit", limit),
                 ("country", self.country.as_str()),
             ])
             .send()
@@ -348,8 +456,61 @@ impl AppleSearch {
         if !resp.status().is_success() {
             return Err(status_error(resp.status()));
         }
-        let body: AppleResponse = json_limited(resp).await?;
-        Ok(pick_apple_album(artist, album, body))
+        json_limited(resp).await
+    }
+
+    /// Last-resort lookup: the album's cover by album + artist name.
+    pub async fn lookup_album(
+        &self,
+        artist: &str,
+        album: &str,
+        trace: &mut Trace,
+    ) -> Result<Option<Artwork>> {
+        let body = self
+            .search(&format!("{artist} {album}"), "album", "10")
+            .await?;
+        let seen = describe_apple(&body, false);
+        let art = pick_apple_album(artist, album, body);
+        if art.is_none() {
+            trace.note(format!(
+                "Apple ({}) album search: no album \"{album}\" by {artist} ({seen})",
+                self.country
+            ));
+        }
+        Ok(art)
+    }
+
+    /// The song search, with notes on what was found and why it didn't match.
+    pub async fn lookup_traced(&self, track: &Track, trace: &mut Trace) -> Result<Option<Artwork>> {
+        // Room for the album version when singles are listed first.
+        let body = self
+            .search(&format!("{} {}", track.artist, track.title), "song", "25")
+            .await?;
+        let seen = describe_apple(&body, true);
+        let Some(pick) = pick_apple(track, body) else {
+            trace.note(format!(
+                "Apple ({}) song search: nothing titled \"{}\" by {} ({seen})",
+                self.country, track.title, track.artist
+            ));
+            return Ok(None);
+        };
+        if pick.album_matched || track.album.is_none() {
+            return Ok(Some(pick.art));
+        }
+        // The song only matched another release (usually the single): use
+        // the cover of the album being played if Apple has it, keeping the
+        // song's length.
+        let album = track.album.as_deref().unwrap_or_default();
+        if let Some(mut art) = self.lookup_album(&track.artist, album, trace).await? {
+            art.duration_ms = pick.art.duration_ms;
+            return Ok(Some(art));
+        }
+        trace.other_release = Some(format!(
+            "Apple has \"{}\" only on other releases, so the cover of one of them is shown \
+             instead of \"{album}\" ({seen})",
+            track.title
+        ));
+        Ok(Some(pick.art))
     }
 }
 
@@ -359,42 +520,7 @@ impl ArtworkSource for AppleSearch {
     }
 
     async fn lookup(&self, track: &Track) -> Result<Option<Artwork>> {
-        self.limiter.acquire().await;
-        let term = format!("{} {}", track.artist, track.title);
-        let resp = self
-            .client
-            .get(&self.base)
-            .query(&[
-                ("term", term.as_str()),
-                ("media", "music"),
-                ("entity", "song"),
-                // Room for the album version when singles are listed first.
-                ("limit", "25"),
-                ("country", self.country.as_str()),
-            ])
-            .send()
-            .await
-            .map_err(|e| ProviderError::Transient(redact(&e)))?;
-        if !resp.status().is_success() {
-            return Err(status_error(resp.status()));
-        }
-        let body: AppleResponse = json_limited(resp).await?;
-        let Some(pick) = pick_apple(track, body) else {
-            return Ok(None);
-        };
-        if pick.album_matched {
-            return Ok(Some(pick.art));
-        }
-        // The song only matched another release (usually the single): use
-        // the cover of the album being played if Apple has it, keeping the
-        // song's length.
-        if let Some(album) = track.album.as_deref()
-            && let Some(mut art) = self.lookup_album(&track.artist, album).await?
-        {
-            art.duration_ms = pick.art.duration_ms;
-            return Ok(Some(art));
-        }
-        Ok(Some(pick.art))
+        self.lookup_traced(track, &mut Trace::default()).await
     }
 }
 
@@ -657,12 +783,9 @@ pub(crate) fn pick_release_ids(track: &Track, resp: MbSearch) -> Vec<String> {
         .collect()
 }
 
-impl ArtworkSource for CoverArtArchive {
-    fn kind(&self) -> ArtworkSourceKind {
-        ArtworkSourceKind::CoverArtArchive
-    }
-
-    async fn lookup(&self, track: &Track) -> Result<Option<Artwork>> {
+impl CoverArtArchive {
+    /// The lookup, with notes on each step that found nothing.
+    pub async fn lookup_traced(&self, track: &Track, trace: &mut Trace) -> Result<Option<Artwork>> {
         let found = |image_url, release| Artwork {
             source: ArtworkSourceKind::CoverArtArchive,
             image_url,
@@ -671,25 +794,60 @@ impl ArtworkSource for CoverArtArchive {
             release,
         };
         // 1. The exact release Last.fm told us about.
-        if let Some(id) = &track.album_mbid
-            && let Some(url) = self.release_art(id).await?
-        {
-            return Ok(Some(found(url, None)));
+        if let Some(id) = &track.album_mbid {
+            match self.release_art(id).await? {
+                Some(url) => return Ok(Some(found(url, None))),
+                None => trace.note(format!(
+                    "Cover Art Archive: the release Last.fm named ({id}) has no front cover"
+                )),
+            }
         }
         // 2. The album's cover (release group), found by album + artist name.
-        if let Some(album) = track.album.as_deref()
-            && let Some((group, kind)) = self.search_release_group(&track.artist, album).await?
-            && let Some(url) = self.release_group_art(&group).await?
-        {
-            return Ok(Some(found(url, kind)));
+        if let Some(album) = track.album.as_deref() {
+            match self.search_release_group(&track.artist, album).await? {
+                Some((group, kind)) => match self.release_group_art(&group).await? {
+                    Some(url) => return Ok(Some(found(url, kind))),
+                    None => trace.note(format!(
+                        "Cover Art Archive: album \"{album}\" ({group}) has no front cover"
+                    )),
+                },
+                None => trace.note(format!(
+                    "MusicBrainz: no album \"{album}\" by {}",
+                    track.artist
+                )),
+            }
         }
         // 3. Releases containing this recording.
-        for id in self.search_release_ids(track).await? {
-            if let Some(url) = self.release_art(&id).await? {
+        let ids = self.search_release_ids(track).await?;
+        if ids.is_empty() {
+            trace.note(format!(
+                "MusicBrainz: no recording \"{}\" by {}",
+                track.title, track.artist
+            ));
+        }
+        for id in &ids {
+            if let Some(url) = self.release_art(id).await? {
                 return Ok(Some(found(url, None)));
             }
         }
+        if !ids.is_empty() {
+            trace.note(format!(
+                "Cover Art Archive: none of the {} releases with \"{}\" has a front cover",
+                ids.len(),
+                track.title
+            ));
+        }
         Ok(None)
+    }
+}
+
+impl ArtworkSource for CoverArtArchive {
+    fn kind(&self) -> ArtworkSourceKind {
+        ArtworkSourceKind::CoverArtArchive
+    }
+
+    async fn lookup(&self, track: &Track) -> Result<Option<Artwork>> {
+        self.lookup_traced(track, &mut Trace::default()).await
     }
 }
 
@@ -724,16 +882,20 @@ impl ArtworkResolver {
         &self,
         kind: ArtworkSourceKind,
         track: &Track,
+        trace: &mut Trace,
     ) -> Option<Result<Option<Artwork>>> {
         let mut attempt = 0;
         loop {
             let res = match kind {
-                ArtworkSourceKind::Apple => self.apple.as_ref()?.lookup(track).await,
-                ArtworkSourceKind::CoverArtArchive => self.caa.as_ref()?.lookup(track).await,
+                ArtworkSourceKind::Apple => self.apple.as_ref()?.lookup_traced(track, trace).await,
+                ArtworkSourceKind::CoverArtArchive => {
+                    self.caa.as_ref()?.lookup_traced(track, trace).await
+                }
             };
             match res {
                 Err(e) if e.is_retryable() && attempt == 0 => {
                     attempt += 1;
+                    trace.note(format!("{}: {e}; retrying once", kind.name()));
                     tracing::debug!(source = ?kind, error = %e, "artwork lookup failed; retrying once");
                     tokio::time::sleep(RETRY_DELAY).await;
                 }
@@ -750,6 +912,12 @@ impl ArtworkResolver {
     /// Errors are logged and treated as "no art" (not cached), so presence
     /// never fails because of art.
     pub async fn resolve(&self, track: &Track) -> Option<Artwork> {
+        self.resolve_explained(track).await.0
+    }
+
+    /// Like [`Self::resolve`], plus what was tried (`None` when the answer
+    /// came from the cache, so each miss is reported once).
+    pub async fn resolve_explained(&self, track: &Track) -> (Option<Artwork>, Option<Trace>) {
         // The same song on an album and as a single has different covers.
         let key = format!(
             "{}\u{1f}{}",
@@ -764,7 +932,11 @@ impl ArtworkResolver {
             && let Some(hit) = cache.get(&key, POSITIVE_TTL)
             && (hit.is_some() || cache.get(&key, NEGATIVE_TTL).is_some())
         {
-            return hit;
+            return (hit, None);
+        }
+        let mut trace = Trace::default();
+        if self.apple.is_none() && self.caa.is_none() {
+            trace.note("All album art sources are turned off in the configuration");
         }
         let order = if self.apple_first {
             [ArtworkSourceKind::Apple, ArtworkSourceKind::CoverArtArchive]
@@ -777,8 +949,19 @@ impl ArtworkResolver {
         let mut had_error = false;
         let mut found = None;
         'outer: for (pass, t) in passes.iter().enumerate() {
+            if pass > 0 {
+                trace.note(format!(
+                    "Retrying with simplified names: \"{}\" by {}{}",
+                    t.title,
+                    t.artist,
+                    t.album
+                        .as_deref()
+                        .map(|a| format!(" on \"{a}\""))
+                        .unwrap_or_default()
+                ));
+            }
             for kind in order {
-                match self.lookup_once(kind, t).await {
+                match self.lookup_once(kind, t, &mut trace).await {
                     Some(Ok(Some(art))) => {
                         if pass > 0 {
                             tracing::debug!(title = %t.title, "artwork found with simplified names");
@@ -789,6 +972,7 @@ impl ArtworkResolver {
                     Some(Ok(None)) | None => {}
                     Some(Err(e)) => {
                         had_error = true;
+                        trace.note(format!("{}: {e}", kind.name()));
                         tracing::debug!(source = ?kind, error = %e, "artwork lookup failed");
                     }
                 }
@@ -799,10 +983,11 @@ impl ArtworkResolver {
         {
             let t = simple.as_ref().unwrap_or(track);
             if let Some(album) = t.album.as_deref() {
-                match apple.lookup_album(&t.artist, album).await {
+                match apple.lookup_album(&t.artist, album, &mut trace).await {
                     Ok(art) => found = art,
                     Err(e) => {
                         had_error = true;
+                        trace.note(format!("Apple album search: {e}"));
                         tracing::debug!(error = %e, "album artwork lookup failed");
                     }
                 }
@@ -813,7 +998,10 @@ impl ArtworkResolver {
         {
             cache.insert(key, found.clone());
         }
-        found
+        if had_error && found.is_none() {
+            trace.note("Not remembered as \"no art\": it will be tried again next time");
+        }
+        (found, Some(trace))
     }
 }
 
@@ -920,6 +1108,102 @@ mod tests {
         let p = pick(Some("Some Compilation"));
         assert!(!p.album_matched && p.art.image_url.contains("/single/"));
         assert!(!pick(None).album_matched);
+    }
+
+    #[test]
+    fn artists_match_in_any_order() {
+        let lastfm = "Justice, King Gizzard & The Lizard Wizard, Tame Impala & SZA";
+        let apple = "Justice, Tame Impala, SZA & King Gizzard & The Lizard Wizard";
+        assert!(artist_matches(lastfm, apple));
+        assert!(artist_matches(
+            "Yung Lean feat. Future",
+            "Yung Lean, Future & Metro Boomin"
+        ));
+        assert!(artist_matches("Daft Punk", "Daft Punk"));
+        // A cover by someone else is not the same credit.
+        assert!(!artist_matches(lastfm, "Alala"));
+        assert!(!artist_matches("SZA", "Justice, Tame Impala"));
+        assert!(!artist_matches("", "Justice"));
+    }
+
+    /// Real iTunes results (US) for the GTA VI song; the album Last.fm
+    /// reports ("The Album") isn't in Apple's search at all.
+    const HURRICANE: &str = r#"{"results":[
+        {"artistName":"Justice, Tame Impala, SZA & King Gizzard & The Lizard Wizard",
+         "trackName":"Flower In A Hurricane [From GTAVI: Original Score]",
+         "collectionName":"Flower In A Hurricane [From GTAVI: Original Score] - Single",
+         "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/single/100x100bb.jpg"},
+        {"artistName":"Alala","trackName":"Flower in a Hurricane (from \"Grand Theft Auto VI\") [Epic Cover Version]",
+         "collectionName":"Flower in a Hurricane - Single",
+         "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/cover/100x100bb.jpg"},
+        {"artistName":"Justice, Tame Impala, SZA & King Gizzard & The Lizard Wizard",
+         "trackName":"Flower In A Hurricane [From GTAVI: Original Score]",
+         "collectionName":"Grand Theft Auto VI: Original Score",
+         "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/score/100x100bb.jpg"}]}"#;
+
+    #[test]
+    fn credit_order_and_unknown_album() {
+        let t = Track {
+            album: Some("Grand Theft Auto VI: The Album".into()),
+            ..track(
+                "Justice, King Gizzard & The Lizard Wizard, Tame Impala & SZA",
+                "Flower In A Hurricane",
+            )
+        };
+        let p = pick_apple(&t, serde_json::from_str(HURRICANE).unwrap()).unwrap();
+        // Not the album being played, so the caller tries the album search
+        // next and falls back to this cover.
+        assert!(!p.album_matched);
+        assert!(p.art.image_url.contains("/single/"), "{}", p.art.image_url);
+        assert_eq!(p.art.release, Some(ReleaseKind::Single));
+    }
+
+    #[test]
+    fn compilation_albums_by_various_artists() {
+        let json = r#"{"results":[
+            {"artistName":"Various Artists","collectionName":"Grand Theft Auto VI: The Album",
+             "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/va/100x100bb.jpg"},
+            {"artistName":"Various Artists","collectionName":"Grand Theft Auto IV (Remixes)",
+             "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/x/100x100bb.jpg"}]}"#;
+        let pick = |album| {
+            pick_apple_album(
+                "Justice, King Gizzard & The Lizard Wizard, Tame Impala & SZA",
+                album,
+                serde_json::from_str(json).unwrap(),
+            )
+        };
+        assert!(
+            pick("Grand Theft Auto VI: The Album")
+                .unwrap()
+                .image_url
+                .contains("/va/")
+        );
+        // "Various Artists" only counts with the exact album name.
+        assert!(pick("Grand Theft Auto IV").is_none());
+    }
+
+    #[test]
+    fn trace_is_bounded_and_describes_results() {
+        let mut t = Trace::default();
+        for i in 0..40 {
+            t.note(format!("{i} {}", "x".repeat(500)));
+        }
+        assert_eq!(t.notes().len(), Trace::MAX_NOTES);
+        assert!(
+            t.notes()
+                .iter()
+                .all(|n| n.chars().count() <= Trace::MAX_NOTE_CHARS)
+        );
+
+        let resp: AppleResponse = serde_json::from_str(HURRICANE).unwrap();
+        let d = describe_apple(&resp, true);
+        assert!(
+            d.starts_with("3 results, e.g. \"Flower In A Hurricane"),
+            "{d}"
+        );
+        assert!(d.contains("by Alala on"), "{d}");
+        let empty: AppleResponse = serde_json::from_str(r#"{"results":[]}"#).unwrap();
+        assert_eq!(describe_apple(&empty, false), "no results");
     }
 
     #[test]
@@ -1079,6 +1363,55 @@ mod live {
         let art = resolver.resolve(&track).await;
         eprintln!("resolved: {art:?}");
         assert!(art.is_some_and(|a| a.image_url.starts_with("https://")));
+    }
+
+    #[tokio::test]
+    #[ignore = "uses the real Apple / MusicBrainz / Cover Art Archive services"]
+    async fn credit_order_live_and_trace() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = crate::http::client().unwrap();
+        let resolver = ArtworkResolver::new(
+            Some(AppleSearch::new(client.clone(), "US")),
+            Some(CoverArtArchive::new(client)),
+            true,
+        );
+        let track = Track {
+            artist: "Justice, King Gizzard & The Lizard Wizard, Tame Impala & SZA".into(),
+            title: "Flower In A Hurricane".into(),
+            album: Some("Grand Theft Auto VI: The Album".into()),
+            album_mbid: None,
+            url: None,
+        };
+        let (art, trace) = resolver.resolve_explained(&track).await;
+        let trace = trace.unwrap();
+        eprintln!(
+            "art: {art:?}\nnotes: {:#?}\nother: {:?}",
+            trace.notes(),
+            trace.other_release
+        );
+        assert!(art.is_some());
+        assert!(trace.other_release.is_some());
+        // Second time: from the cache, nothing to report.
+        assert!(resolver.resolve_explained(&track).await.1.is_none());
+
+        let missing = Track {
+            artist: "Nobody Anybody Zzqx".into(),
+            title: "No Such Song Zzqx".into(),
+            album: Some("No Such Album Zzqx".into()),
+            album_mbid: None,
+            url: None,
+        };
+        let (art, trace) = resolver.resolve_explained(&missing).await;
+        let trace = trace.unwrap();
+        eprintln!("missing notes: {:#?}", trace.notes());
+        assert!(art.is_none());
+        assert!(
+            trace
+                .notes()
+                .iter()
+                .any(|n| n.starts_with("Apple (US) song search"))
+        );
+        assert!(trace.notes().iter().any(|n| n.starts_with("MusicBrainz")));
     }
 
     #[tokio::test]

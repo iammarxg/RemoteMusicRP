@@ -27,7 +27,7 @@ All data lives on the owner's own machine:
 | `update-pending` marker (data dir) | Rollback after a failed update | Plain counter | Deleted after the new version has run for 1 minute |
 | Theme choice (browser `localStorage`, not the server) | Remember dark/light | n/a | Until cleared in the browser |
 | Settings (presence toggles, templates, artist/song blocklist, quiet hours and time zone) | Configuration | Plain | Until changed |
-| Activity log (connection events, presence changes, quiet hours, exports/imports, email results, errors; **no secrets and no listening history**) | Troubleshooting | Plain | Default **30 days**, configurable |
+| Activity log (connection events, presence changes, quiet hours, exports/imports, email results, errors; **no secrets**. No listening history, except the song, artist and album of tracks whose album art wasn't found or came from another release, with what each art source returned) | Troubleshooting | Plain | Default **30 days**, configurable |
 | Counter of songs seen since start | Activity stats | Memory only | Until restart |
 | Artwork lookup cache (artist + track → Apple/Cover Art Archive image URL, Apple track link, or "no match"; **no image bytes**) | Avoid repeated lookups; stay under the iTunes Search API limit (~20/min) | Plain | LRU with size cap; "no match" entries expire after 7 days |
 | `track.getInfo` cache (artist, track, duration) | Progress bar without repeated API calls | Plain | LRU, kept well under Last.fm's **100 MB** storage cap (ToS 4.3); obeys HTTP cache headers |

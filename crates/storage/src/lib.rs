@@ -100,7 +100,8 @@ pub struct SessionRow {
 const SECRETS_TABLE: &str = "secrets";
 /// Row caps keep caches far below Last.fm's 100 MB storage limit.
 const MAX_CACHE_ROWS: i64 = 5000;
-const MAX_LOG_CHARS: usize = 500;
+/// Room for an artwork miss with what each source returned.
+const MAX_LOG_CHARS: usize = 2000;
 
 #[derive(Debug)]
 pub struct Db {

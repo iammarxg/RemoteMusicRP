@@ -20,6 +20,40 @@ use remotemusicrp_storage::LogLevel;
 use tokio::sync::watch;
 
 use crate::app::{App, NowPlayingStatus};
+
+/// Records why a track got no album art (or another release's cover) in
+/// the activity log, with what each source returned, so misses can be
+/// checked later. Each track is reported once; repeats come from the cache.
+fn log_artwork(
+    app: &App,
+    track: &remotemusicrp_providers::Track,
+    found: bool,
+    trace: &remotemusicrp_providers::artwork::Trace,
+) {
+    let song = format!(
+        "\"{}\" by {}{}",
+        track.title,
+        track.artist,
+        track
+            .album
+            .as_deref()
+            .map(|a| format!(" (album \"{a}\")"))
+            .unwrap_or_default()
+    );
+    let (level, msg) = if !found {
+        let tried = if trace.notes().is_empty() {
+            "no details".to_owned()
+        } else {
+            trace.notes().join(" · ")
+        };
+        (LogLevel::Warn, format!("No album art for {song}. {tried}"))
+    } else if let Some(other) = &trace.other_release {
+        (LogLevel::Info, format!("Album art for {song}: {other}"))
+    } else {
+        return;
+    };
+    let _ = app.db.log(level, "artwork", &msg);
+}
 use crate::{now_unix, settings};
 
 const IDLE_AFTER: Duration = Duration::from_secs(10 * 60);
@@ -288,7 +322,10 @@ async fn run_presence(app: &Arc<App>, creds: Creds, shutdown: &mut watch::Receiv
                     let key = track.cache_key();
                     if current.as_ref().map(|c| &c.key) != Some(&key) {
                         let first_seen = now_unix();
-                        let art = resolver.resolve(&track).await;
+                        let (art, trace) = resolver.resolve_explained(&track).await;
+                        if let Some(trace) = trace {
+                            log_artwork(app, &track, art.is_some(), &trace);
+                        }
                         let duration = source.track_duration_ms(&track).await.unwrap_or_else(|e| {
                             tracing::debug!(error = %e, "duration lookup failed");
                             None
