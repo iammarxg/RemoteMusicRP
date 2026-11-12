@@ -605,6 +605,50 @@ pub async fn set_autostart(
     Ok(Json(crate::autostart::status()))
 }
 
+/// The dashboard couldn't load the current cover image (blocked by the
+/// browser, offline, removed by the host…). The server can't see that on its
+/// own, so the page reports it and it's logged once per cover. The song and
+/// address come from the server's own state, never from the request.
+pub async fn art_display_failed(
+    State(app): State<Arc<App>>,
+    ctx: Ctx,
+    headers: HeaderMap,
+) -> ApiResult<Json<serde_json::Value>> {
+    ctx.guard(&app, &headers)?;
+    let Some(np) = app.status.borrow().now_playing.clone() else {
+        return Ok(Json(json!({ "logged": false })));
+    };
+    let Some(url) = np.art_url else {
+        return Ok(Json(json!({ "logged": false })));
+    };
+    {
+        let mut last = app
+            .art_display_reported
+            .lock()
+            .map_err(|_| ApiError::internal("lock"))?;
+        if last.as_deref() == Some(url.as_str()) {
+            return Ok(Json(json!({ "logged": false })));
+        }
+        *last = Some(url.clone());
+    }
+    let host = url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("?");
+    let source = np.art_source.unwrap_or("?");
+    let _ = app.db.log(
+        LogLevel::Warn,
+        "artwork",
+        &format!(
+            "The web page couldn't show the album art for \"{}\" by {} (found via {source}, \
+             image from {host}). The cover was found, but this browser didn't load it; Discord \
+             loads images itself, so it may still show there.",
+            np.title, np.artist
+        ),
+    );
+    Ok(Json(json!({ "logged": true })))
+}
+
 pub async fn about() -> Json<serde_json::Value> {
     Json(json!({
         "name": "RemoteMusicRP",

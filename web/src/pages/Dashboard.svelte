@@ -43,6 +43,16 @@
   let total = $derived(np?.duration_ms ? np.duration_ms / 1000 : null);
   let pct = $derived(total ? Math.min(100, (elapsed / total) * 100) : null);
 
+  // A cover the browser couldn't load: show the blank cover with a note, and
+  // tell the server once so it's in the Activity log.
+  let brokenArt = $state(null);
+  function artFailed(url) {
+    if (brokenArt === url) return;
+    brokenArt = url;
+    api.post('/api/artwork/display-failed').catch(() => {});
+  }
+  let artOk = $derived(np?.art_url && brokenArt !== np.art_url);
+
   function uptime(s) {
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
@@ -74,7 +84,7 @@
   {#if error}<p class="error-text" role="alert">{error}</p>{/if}
 
   <section class="stage" aria-live="polite" aria-busy={!data}>
-    {#if np?.art_url && !data?.paused}
+    {#if artOk && !data?.paused}
       {#key np.art_url}
         <img class="backdrop" src={np.art_url} alt="" aria-hidden="true" referrerpolicy="no-referrer"
           in:fade={{ duration: 700 }} />
@@ -104,8 +114,14 @@
     {:else if np}
       {#key np.artist + np.title}
         <div class="np" in:fade={{ duration: 400 }}>
-          {#if np.art_url}
-            <img class="art" src={np.art_url} alt={np.album ?? ''} referrerpolicy="no-referrer" />
+          {#if artOk}
+            <img
+              class="art"
+              src={np.art_url}
+              alt={np.album ?? ''}
+              referrerpolicy="no-referrer"
+              onerror={() => artFailed(np.art_url)}
+            />
           {:else}
             <div class="art blank" aria-hidden="true">
               <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" stroke-width="2" /><circle cx="32" cy="32" r="6" fill="currentColor" /></svg>
@@ -125,6 +141,7 @@
               </div>
             {/if}
             <p class="muted small links">
+              {#if np.art_url && !artOk}<span>{t('dashboard.art_not_loaded')} </span>{/if}
               {#if np.art_source}<span
                   >{t('dashboard.art_from', { source: t(`dashboard.source_${np.art_source}`) })}{#if np.art_release}
                     · {t(`dashboard.release_${np.art_release}`)}{/if}</span

@@ -118,6 +118,9 @@ pub struct App {
     pub sdk_shared: crate::sdk_mode::Shared,
     /// Distinct tracks seen since start (activity stats).
     pub tracks_seen: std::sync::atomic::AtomicU64,
+    /// The cover address the web UI last said it couldn't show, so each one
+    /// is logged once.
+    pub art_display_reported: Mutex<Option<String>>,
 }
 
 impl std::fmt::Debug for App {
@@ -152,6 +155,7 @@ impl App {
             stop: watch::channel(false).0,
             started_unix: crate::now_unix(),
             tracks_seen: std::sync::atomic::AtomicU64::new(0),
+            art_display_reported: Mutex::new(None),
             sdk: match &cfg_mode {
                 remotemusicrp_core::config::DiscordMode::LocalRpc => None,
                 remotemusicrp_core::config::DiscordMode::SocialSdk { library } => {

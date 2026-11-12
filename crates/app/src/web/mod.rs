@@ -196,11 +196,14 @@ async fn guard_requests(State(app): State<Arc<App>>, req: Request, next: Next) -
     let set = |h: &mut axum::http::HeaderMap, k: &'static str, v: &'static str| {
         h.insert(k, HeaderValue::from_static(v));
     };
+    // Cover Art Archive images redirect coverartarchive.org → archive.org →
+    // <node>.archive.org; every hop must be allowed (`*.archive.org` doesn't
+    // cover the bare `archive.org`).
     set(
         h,
         "content-security-policy",
         "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; \
-         img-src 'self' data: https://*.mzstatic.com https://coverartarchive.org https://*.archive.org https://cdn.discordapp.com; \
+         img-src 'self' data: https://*.mzstatic.com https://coverartarchive.org https://archive.org https://*.archive.org https://cdn.discordapp.com; \
          manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     );
     set(h, "x-content-type-options", "nosniff");
@@ -247,6 +250,7 @@ pub fn router(app: Arc<App>) -> Router {
             get(api::get_presence).put(api::put_presence),
         )
         .route("/api/presence/pause", post(api::pause))
+        .route("/api/artwork/display-failed", post(api::art_display_failed))
         .route("/api/discord/sdk", get(discord_sdk::status))
         .route("/api/discord/sdk/begin", post(discord_sdk::begin))
         .route("/api/discord/sdk/finish", post(discord_sdk::finish))

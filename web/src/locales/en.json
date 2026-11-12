@@ -139,6 +139,7 @@
     "locked": "Locked",
     "uptime": "Running for {time}",
     "art_from": "Art: {source}",
+    "art_not_loaded": "This browser couldn't load the cover (see Activity log).",
     "source_apple": "Apple Music",
     "source_cover_art_archive": "Cover Art Archive",
     "release_album": "album cover",
