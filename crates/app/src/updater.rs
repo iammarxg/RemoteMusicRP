@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Auto-updater (portable desktop exe / tarball installs only).
 //!
-//! - Checks GitHub Releases about once a day (if enabled), HTTPS only.
+//! - Checks GitHub Releases about once an hour (if enabled), HTTPS only.
 //! - **Prompted by default**; silent auto-install is opt-in (owner decision).
 //! - Before replacing anything, verifies BOTH:
 //!   1. the binary's minisign (Ed25519) signature with the public key
@@ -33,7 +33,9 @@ const RELEASES_API: &str = "https://api.github.com/repos/iammarxg/RemoteMusicRP/
 const RELEASES_LATEST_PAGE: &str = "https://github.com/iammarxg/RemoteMusicRP/releases/latest";
 const RELEASES_TAG_PREFIX: &str = "https://github.com/iammarxg/RemoteMusicRP/releases/tag/";
 const DOWNLOAD_PREFIX: &str = "https://github.com/iammarxg/RemoteMusicRP/releases/download/";
-const CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
+/// One API request an hour, far below GitHub's anonymous limit of 60 per
+/// hour (shared by everything on the same IP address).
+const CHECK_EVERY: Duration = Duration::from_secs(3600);
 const FIRST_CHECK_AFTER: Duration = Duration::from_secs(90);
 const MAX_BINARY: usize = 64 * 1024 * 1024;
 const MAX_TEXT: usize = 256 * 1024;
@@ -511,7 +513,7 @@ pub fn startup_rollback_check(app: &App) -> Result<(), String> {
     Ok(())
 }
 
-/// Background task: daily check, optional auto-install, and clearing the
+/// Background task: hourly check, optional auto-install, and clearing the
 /// rollback marker once the new version has run for a minute.
 pub async fn run(app: Arc<App>, stop_tx: watch::Sender<bool>, mut stop: watch::Receiver<bool>) {
     let marker = marker_path(&app);
@@ -530,17 +532,26 @@ pub async fn run(app: Arc<App>, stop_tx: watch::Sender<bool>, mut stop: watch::R
     if !app.cfg.update_check {
         return;
     }
+    // A version whose automatic install failed isn't retried every hour
+    // (each try downloads the release and logs a warning) until the app
+    // restarts; "Update now" in the web UI still works.
+    let mut failed_version: Option<String> = None;
     loop {
         let info = check(&app).await;
         if info.available
             && info.can_install
             && settings::get_bool(&app.db, settings::UPDATES_AUTO_INSTALL)
+            && failed_version != info.latest
             && let Err(e) = install(&app, &stop_tx).await
         {
+            failed_version.clone_from(&info.latest);
             let _ = app.db.log(
                 LogLevel::Warn,
                 "update",
-                &format!("automatic update failed: {e}"),
+                &format!(
+                    "automatic update failed: {e}. It won't be retried automatically until \
+                     RemoteMusicRP restarts; use Update and restart in Settings to try again"
+                ),
             );
         }
         tokio::select! {

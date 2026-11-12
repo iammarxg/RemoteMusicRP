@@ -166,7 +166,7 @@ token is read-only, and no build cache is used.
   ```
 
 - **In-app updates:** Windows, macOS, tarball and AppImage installs check
-  GitHub about once a day. They offer the update (or install it, if the owner
+  GitHub about once an hour. They offer the update (or install it, if the owner
   chose silent updates). Before replacing anything they verify the
   signature, the trusted comment (version and file name) and the checksum.
   They roll back automatically after 3 failed starts. Package (deb/rpm/Arch)

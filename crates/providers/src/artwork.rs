@@ -317,6 +317,9 @@ struct AppleResult {
     track_time_millis: Option<u64>,
     collection_name: Option<String>,
     collection_view_url: Option<String>,
+    /// The album's own artist ("Various Artists" for compilations); song
+    /// results carry it next to the track's artist.
+    collection_artist_name: Option<String>,
 }
 
 /// Ask for 1024×1024 by rewriting the size segment (undocumented, so the
@@ -420,17 +423,26 @@ pub(crate) fn pick_apple_album(artist: &str, album: &str, resp: AppleResponse) -
             normalize(a) == "variousartists"
                 && r.collection_name.as_deref().map(exact_album) == Some(exact_album(album))
         };
-        let artist_ok = r
-            .artist_name
-            .as_deref()
-            .is_some_and(|a| artist_matches(artist, a) || compilation(a));
+        let artist_ok = [
+            r.artist_name.as_deref(),
+            r.collection_artist_name.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|a| artist_matches(artist, a) || compilation(a));
         if !(album_ok && artist_ok) {
             return None;
         }
         Some(Artwork {
             source: ArtworkSourceKind::Apple,
             image_url: apple_image(&r)?,
-            link_url: apple_link(r.collection_view_url.as_deref()),
+            // The album page: song results link "album?i=<that song>", which
+            // may be another track than the one playing.
+            link_url: apple_link(
+                r.collection_view_url
+                    .as_deref()
+                    .map(|u| u.split_once('?').map_or(u, |(page, _)| page)),
+            ),
             duration_ms: None,
             release: r.collection_name.as_deref().map(ReleaseKind::from_apple),
         })
@@ -438,18 +450,30 @@ pub(crate) fn pick_apple_album(artist: &str, album: &str, resp: AppleResponse) -
 }
 
 impl AppleSearch {
-    async fn search(&self, term: &str, entity: &str, limit: &str) -> Result<AppleResponse> {
+    /// One Search API call. `attribute` limits which field `term` is
+    /// matched against (e.g. `albumTerm`: only album names).
+    async fn search(
+        &self,
+        term: &str,
+        entity: &str,
+        limit: &str,
+        attribute: Option<&str>,
+    ) -> Result<AppleResponse> {
         self.limiter.acquire().await;
+        let mut query = vec![
+            ("term", term),
+            ("media", "music"),
+            ("entity", entity),
+            ("limit", limit),
+            ("country", self.country.as_str()),
+        ];
+        if let Some(a) = attribute {
+            query.push(("attribute", a));
+        }
         let resp = self
             .client
             .get(&self.base)
-            .query(&[
-                ("term", term),
-                ("media", "music"),
-                ("entity", entity),
-                ("limit", limit),
-                ("country", self.country.as_str()),
-            ])
+            .query(&query)
             .send()
             .await
             .map_err(|e| ProviderError::Transient(redact(&e)))?;
@@ -466,8 +490,21 @@ impl AppleSearch {
         album: &str,
         trace: &mut Trace,
     ) -> Result<Option<Artwork>> {
+        // 1. Songs on an album with this name. Finds albums the album search
+        //    doesn't list (e.g. "Grand Theft Auto VI: The Album"); every
+        //    track carries the album's cover.
+        let body = self.search(album, "song", "50", Some("albumTerm")).await?;
+        let seen = describe_apple(&body, true);
+        if let Some(art) = pick_apple_album(artist, album, body) {
+            return Ok(Some(art));
+        }
+        trace.note(format!(
+            "Apple ({}) album-name search: no songs on \"{album}\" by {artist} ({seen})",
+            self.country
+        ));
+        // 2. The album search.
         let body = self
-            .search(&format!("{artist} {album}"), "album", "10")
+            .search(&format!("{artist} {album}"), "album", "10", None)
             .await?;
         let seen = describe_apple(&body, false);
         let art = pick_apple_album(artist, album, body);
@@ -484,7 +521,12 @@ impl AppleSearch {
     pub async fn lookup_traced(&self, track: &Track, trace: &mut Trace) -> Result<Option<Artwork>> {
         // Room for the album version when singles are listed first.
         let body = self
-            .search(&format!("{} {}", track.artist, track.title), "song", "25")
+            .search(
+                &format!("{} {}", track.artist, track.title),
+                "song",
+                "25",
+                None,
+            )
             .await?;
         let seen = describe_apple(&body, true);
         let Some(pick) = pick_apple(track, body) else {
@@ -1182,6 +1224,41 @@ mod tests {
         assert!(pick("Grand Theft Auto IV").is_none());
     }
 
+    /// Real shape of an `attribute=albumTerm` song result: the track's own
+    /// artist differs, but the album is a "Various Artists" compilation.
+    #[test]
+    fn album_found_through_its_songs() {
+        let json = r#"{"results":[
+            {"artistName":"Morgan Wallen","collectionArtistName":"Various Artists",
+             "trackName":"Last Thing You Need","collectionName":"Grand Theft Auto VI: The Album",
+             "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/album/100x100bb.jpg",
+             "collectionViewUrl":"https://music.apple.com/us/album/last-thing-you-need/6812476961?i=6812477290&uo=4"},
+            {"artistName":"Drew Jacobs","trackName":"Last Thing You Need",
+             "collectionName":"Last Thing You Need (from GTAVI: The Album) - Single",
+             "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/single/100x100bb.jpg"}]}"#;
+        let art = pick_apple_album(
+            "Justice, King Gizzard & The Lizard Wizard, Tame Impala & SZA",
+            "Grand Theft Auto VI: The Album",
+            serde_json::from_str(json).unwrap(),
+        )
+        .unwrap();
+        assert!(art.image_url.contains("/album/"), "{}", art.image_url);
+        assert_eq!(art.release, Some(ReleaseKind::Album));
+        assert_eq!(
+            art.link_url.as_deref(),
+            Some("https://music.apple.com/us/album/last-thing-you-need/6812476961")
+        );
+        // Another album with a similar name isn't taken.
+        assert!(
+            pick_apple_album(
+                "Justice",
+                "Grand Theft Auto VI",
+                serde_json::from_str(json).unwrap()
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn trace_is_bounded_and_describes_results() {
         let mut t = Trace::default();
@@ -1389,8 +1466,10 @@ mod live {
             trace.notes(),
             trace.other_release
         );
-        assert!(art.is_some());
-        assert!(trace.other_release.is_some());
+        let art = art.unwrap();
+        assert_eq!(art.release, Some(ReleaseKind::Album));
+        assert!(art.link_url.unwrap().contains("/6812476961"));
+        assert!(trace.other_release.is_none());
         // Second time: from the cache, nothing to report.
         assert!(resolver.resolve_explained(&track).await.1.is_none());
 

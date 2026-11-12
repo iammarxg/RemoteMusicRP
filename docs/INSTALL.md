@@ -336,7 +336,7 @@ tunnel, which counts as "on this computer").
 
 ## 9. Updates
 
-- **Windows, macOS, tarball and AppImage:** the app checks GitHub once a day
+- **Windows, macOS, tarball and AppImage:** the app checks GitHub once an hour
   and asks before installing. It only installs files signed with the key
   above, and rolls back automatically if the new version fails to start.
 - **deb, rpm, Arch, Docker:** the app only tells you an update exists. Update
