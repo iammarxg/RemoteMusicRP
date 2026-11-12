@@ -2,7 +2,7 @@
 
 > This is the single source of truth for every agent and contributor. `AGENTS.md` only points here.
 > Keep this file accurate. Whenever a decision changes, update the relevant section **and** add an entry to the Decisions log at the bottom.
-> Details live in `docs/` (`docs/PHASE0.md`, `docs/SECURITY.md`, `docs/DATA.md`).
+> Details live in `docs/` (`docs/PHASE0.md`, `docs/SECURITY.md`, `docs/DATA.md`, `docs/RELEASING.md`).
 
 **Current status (2026-11-09):** Phase 1 is complete (see `docs/PHASE1.md`). **Phase 2 is functionally complete** (see `docs/PHASE2.md`). **Phase 3 started, features first** (owner choice): blocklist, quiet hours, activity stats, email alerts and export/import are built. **Server mode (Social SDK) is built** for one Discord account per instance and passed a live test in WSL (sign-in, presence, restart from the stored token, clean stop). **Phase 4 started:** release and Docker workflows, packaging (zip, tarball, AppImage, deb, rpm, PKGBUILD, Docker), Windows no-console launcher and install docs are written (see `docs/INSTALL.md`); the first real release run is pending. **Renamed to RemoteMusicRP** (2026-11-10). Linux tray icon and the bundled Inter font are done. i18n/Weblate later (owner choice).
 
@@ -210,6 +210,8 @@ Full threat model: `docs/SECURITY.md`. Data inventory: `docs/DATA.md`.
   - Community translation runs on **Hosted Weblate (Libre plan)**. Request it in Phase 3 and re-check eligibility then.
 
 ## 8. Build, release and distribution
+
+- **Release steps and the pipeline:** `docs/RELEASING.md` (version bump, tag, draft, publish, Docker, recovery).
 
 - Only support platforms that still get vendor security updates. Re-check the matrix before each release.
 - GitHub Actions builds:

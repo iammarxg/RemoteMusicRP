@@ -44,5 +44,6 @@ Archive. Data comes from Last.fm (powered by AudioScrobbler).
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - Report vulnerabilities privately: [SECURITY.md](SECURITY.md)
 - Design and decisions: [CLAUDE.md](CLAUDE.md) and [docs/](docs/)
+- Making a release: [docs/RELEASING.md](docs/RELEASING.md)
 
 RemoteMusicRP isn't affiliated with Discord or Last.fm.
