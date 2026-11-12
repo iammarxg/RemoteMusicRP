@@ -674,6 +674,7 @@ pub async fn delete_everything(
         .await?;
     }
     app.db.wipe().map_err(ApiError::db)?;
+    crate::remove_autostart();
     let external = matches!(app.cfg.key_store, KeyStoreConfig::ExternalFile(_));
     {
         let mut store = app

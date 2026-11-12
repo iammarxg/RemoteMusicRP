@@ -76,8 +76,11 @@ It should say `Signature and comment signature verified`.
 4. Keep the **Discord desktop app** running: RemoteMusicRP talks to it
    directly.
 
-To start it with Windows, put a shortcut to `remotemusicrp-desktop.exe` in
-`shell:startup` (press Win+R and type that).
+It starts with Windows by default (in the background, with its tray icon). To
+change that, open **Settings → Startup** and switch **Start with Windows**
+off. You can also turn it off in Task Manager (Startup apps); the Settings page
+shows that. If you move the folder, switch the option off and on again so
+Windows uses the new location.
 
 Your data is in `%LOCALAPPDATA%\RemoteMusicRP`. The encryption key is in
 Windows Credential Manager. If the app doesn't start, look at
@@ -100,6 +103,11 @@ keep the app itself in a terminal with its log visible, use
    `xattr -d com.apple.quarantine remotemusicrp`.
 4. Click the menu-bar icon to open the web UI. Keep the Discord app running.
 
+It opens at login by default (a LaunchAgent in `~/Library/LaunchAgents`; macOS
+may show a "Background item added" notice). Switch **Open at login** off in
+**Settings → Startup** to stop that. If you move the program, switch it off
+and on again.
+
 ## 4. Linux desktop (AppImage)
 
 **Desktop release: the Discord desktop app must be open on the same
@@ -115,6 +123,11 @@ computer.**
    ```
 3. A tray icon appears. Click it to open the web UI. Keep the Discord app
    running.
+
+It starts at login by default (an entry in `~/.config/autostart`, which
+KDE, GNOME, Cinnamon, XFCE and MATE all read). Switch **Start at login** off
+in **Settings → Startup** to stop that. If you move the `.AppImage`, switch it
+off and on again.
 
 The tray icon works on KDE Plasma, Cinnamon, XFCE, MATE and others. On
 GNOME it needs the **AppIndicator and KStatusNotifierItem Support**

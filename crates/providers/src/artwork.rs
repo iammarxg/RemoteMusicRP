@@ -31,6 +31,47 @@ pub enum ArtworkSourceKind {
     CoverArtArchive,
 }
 
+/// The kind of release the artwork belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseKind {
+    Album,
+    Ep,
+    Single,
+}
+
+impl ReleaseKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Album => "album",
+            Self::Ep => "ep",
+            Self::Single => "single",
+        }
+    }
+
+    /// Apple marks singles and EPs in the collection name
+    /// ("Red Bottoms - Single", "Love Songs - EP"); everything else is an album.
+    fn from_apple(collection: &str) -> Self {
+        let c = collection.trim_end().to_lowercase();
+        if c.ends_with(" - single") {
+            Self::Single
+        } else if c.ends_with(" - ep") {
+            Self::Ep
+        } else {
+            Self::Album
+        }
+    }
+
+    /// MusicBrainz release-group primary type.
+    fn from_mb(primary_type: &str) -> Option<Self> {
+        match primary_type.to_ascii_lowercase().as_str() {
+            "album" => Some(Self::Album),
+            "ep" => Some(Self::Ep),
+            "single" => Some(Self::Single),
+            _ => None,
+        }
+    }
+}
+
 /// A resolved artwork result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artwork {
@@ -41,6 +82,8 @@ pub struct Artwork {
     pub link_url: Option<String>,
     /// Track length reported by the source, if any (Apple provides it).
     pub duration_ms: Option<u64>,
+    /// Album, EP or single, when the source says.
+    pub release: Option<ReleaseKind>,
 }
 
 pub trait ArtworkSource: Send + Sync {
@@ -73,6 +116,47 @@ pub fn normalize(s: &str) -> String {
         }
     }
     out
+}
+
+/// Normalize an album name: like [`normalize`], and also ignore a release
+/// type suffix ("X - Single", "X - EP", "X EP", "X (Single)"), so Last.fm's
+/// and Apple's spellings of the same release compare equal.
+pub fn normalize_album(s: &str) -> String {
+    let n = normalize(s);
+    let lowered = s.trim().to_lowercase();
+    let bare = lowered.split(" - ").next().unwrap_or(&lowered).trim_end();
+    for suffix in [" ep", " single"] {
+        if let Some(stem) = bare.strip_suffix(suffix) {
+            let stem = normalize(stem);
+            if !stem.is_empty() {
+                return stem;
+            }
+        }
+    }
+    n
+}
+
+/// Stricter album key: keeps bracketed parts ("Red Bottoms (Remixes)" is
+/// not "Red Bottoms") but still ignores the release type suffix.
+fn exact_album(s: &str) -> String {
+    let lowered = s.trim().to_lowercase();
+    let mut bare = lowered.as_str();
+    for suffix in [
+        " - single",
+        " - ep",
+        " ep",
+        " single",
+        " (single)",
+        " [single]",
+    ] {
+        if let Some(stem) = bare.strip_suffix(suffix)
+            && stem.chars().any(char::is_alphanumeric)
+        {
+            bare = stem;
+            break;
+        }
+    }
+    bare.chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
 fn artist_matches(wanted: &str, got: &str) -> bool {
@@ -142,41 +226,82 @@ fn upscale_apple(url: &str) -> String {
     url.to_owned()
 }
 
-pub(crate) fn pick_apple(track: &Track, resp: AppleResponse) -> Option<Artwork> {
+/// The best Apple song match, and whether it comes from the album Last.fm
+/// reported (so a single's cover isn't shown for an album track).
+#[derive(Debug)]
+pub(crate) struct ApplePick {
+    pub art: Artwork,
+    pub album_matched: bool,
+}
+
+fn apple_image(r: &AppleResult) -> Option<String> {
+    let raw = r.artwork_url100.as_deref()?;
+    crate::safe_url(&upscale_apple(raw), &["mzstatic.com"], MAX_IMAGE_URL)
+        .or_else(|| crate::safe_url(raw, &["mzstatic.com"], MAX_IMAGE_URL))
+}
+
+fn apple_link(u: Option<&str>) -> Option<String> {
+    u.and_then(|u| crate::safe_url(u, &["music.apple.com", "itunes.apple.com"], MAX_LINK_URL))
+}
+
+/// Pick a song result: title and artist must match. Among those, the one
+/// from the album being played wins (Apple often lists the single first);
+/// without an album match, the first result is kept and flagged.
+pub(crate) fn pick_apple(track: &Track, resp: AppleResponse) -> Option<ApplePick> {
     let wanted_title = normalize(&track.title);
-    resp.results.into_iter().find_map(|r| {
-        let title_ok = r
-            .track_name
-            .as_deref()
-            .is_some_and(|t| normalize(t) == wanted_title);
-        let artist_ok = r
-            .artist_name
-            .as_deref()
-            .is_some_and(|a| artist_matches(&track.artist, a));
-        if !(title_ok && artist_ok) {
-            return None;
-        }
-        let raw = r.artwork_url100.as_deref()?;
-        let image_url = crate::safe_url(&upscale_apple(raw), &["mzstatic.com"], MAX_IMAGE_URL)
-            .or_else(|| crate::safe_url(raw, &["mzstatic.com"], MAX_IMAGE_URL))?;
-        let link_url = r.track_view_url.as_deref().and_then(|u| {
-            crate::safe_url(u, &["music.apple.com", "itunes.apple.com"], MAX_LINK_URL)
-        });
-        let duration_ms = r
-            .track_time_millis
-            .filter(|ms| (1..=3 * 3600 * 1000).contains(ms));
-        Some(Artwork {
+    let wanted_album = track
+        .album
+        .as_deref()
+        .map(normalize_album)
+        .filter(|a| !a.is_empty());
+    let candidates: Vec<(AppleResult, String)> = resp
+        .results
+        .into_iter()
+        .filter(|r| {
+            r.track_name
+                .as_deref()
+                .is_some_and(|t| normalize(t) == wanted_title)
+                && r.artist_name
+                    .as_deref()
+                    .is_some_and(|a| artist_matches(&track.artist, a))
+        })
+        .filter_map(|r| {
+            let img = apple_image(&r)?;
+            Some((r, img))
+        })
+        .collect();
+    // An exact name (brackets included) beats a loose one, so "X (Remixes)
+    // EP" doesn't pick the "X - Single" that only matches loosely.
+    let exact = track.album.as_deref().map(exact_album);
+    let matched = wanted_album.as_ref().and_then(|want| {
+        let collection = |(r, _): &(AppleResult, String)| r.collection_name.clone();
+        candidates
+            .iter()
+            .position(|c| collection(c).map(|n| exact_album(&n)) == exact)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .position(|c| collection(c).map(|n| normalize_album(&n)).as_ref() == Some(want))
+            })
+    });
+    let (r, image_url) = candidates.into_iter().nth(matched.unwrap_or(0))?;
+    Some(ApplePick {
+        album_matched: matched.is_some(),
+        art: Artwork {
             source: ArtworkSourceKind::Apple,
             image_url,
-            link_url,
-            duration_ms,
-        })
+            link_url: apple_link(r.track_view_url.as_deref()),
+            duration_ms: r
+                .track_time_millis
+                .filter(|ms| (1..=3 * 3600 * 1000).contains(ms)),
+            release: r.collection_name.as_deref().map(ReleaseKind::from_apple),
+        },
     })
 }
 
 /// Pick an album (collection) result: album name and artist must match.
 pub(crate) fn pick_apple_album(artist: &str, album: &str, resp: AppleResponse) -> Option<Artwork> {
-    let wanted = normalize(album);
+    let wanted = normalize_album(album);
     if wanted.is_empty() {
         return None;
     }
@@ -184,7 +309,7 @@ pub(crate) fn pick_apple_album(artist: &str, album: &str, resp: AppleResponse) -
         let album_ok = r
             .collection_name
             .as_deref()
-            .is_some_and(|c| normalize(c) == wanted);
+            .is_some_and(|c| normalize_album(c) == wanted);
         let artist_ok = r
             .artist_name
             .as_deref()
@@ -192,17 +317,12 @@ pub(crate) fn pick_apple_album(artist: &str, album: &str, resp: AppleResponse) -
         if !(album_ok && artist_ok) {
             return None;
         }
-        let raw = r.artwork_url100.as_deref()?;
-        let image_url = crate::safe_url(&upscale_apple(raw), &["mzstatic.com"], MAX_IMAGE_URL)
-            .or_else(|| crate::safe_url(raw, &["mzstatic.com"], MAX_IMAGE_URL))?;
-        let link_url = r.collection_view_url.as_deref().and_then(|u| {
-            crate::safe_url(u, &["music.apple.com", "itunes.apple.com"], MAX_LINK_URL)
-        });
         Some(Artwork {
             source: ArtworkSourceKind::Apple,
-            image_url,
-            link_url,
+            image_url: apple_image(&r)?,
+            link_url: apple_link(r.collection_view_url.as_deref()),
             duration_ms: None,
+            release: r.collection_name.as_deref().map(ReleaseKind::from_apple),
         })
     })
 }
@@ -248,7 +368,8 @@ impl ArtworkSource for AppleSearch {
                 ("term", term.as_str()),
                 ("media", "music"),
                 ("entity", "song"),
-                ("limit", "10"),
+                // Room for the album version when singles are listed first.
+                ("limit", "25"),
                 ("country", self.country.as_str()),
             ])
             .send()
@@ -258,7 +379,22 @@ impl ArtworkSource for AppleSearch {
             return Err(status_error(resp.status()));
         }
         let body: AppleResponse = json_limited(resp).await?;
-        Ok(pick_apple(track, body))
+        let Some(pick) = pick_apple(track, body) else {
+            return Ok(None);
+        };
+        if pick.album_matched {
+            return Ok(Some(pick.art));
+        }
+        // The song only matched another release (usually the single): use
+        // the cover of the album being played if Apple has it, keeping the
+        // song's length.
+        if let Some(album) = track.album.as_deref()
+            && let Some(mut art) = self.lookup_album(&track.artist, album).await?
+        {
+            art.duration_ms = pick.art.duration_ms;
+            return Ok(Some(art));
+        }
+        Ok(Some(pick.art))
     }
 }
 
@@ -330,7 +466,11 @@ impl CoverArtArchive {
     }
 
     /// Find the album (MusicBrainz release group) by album + artist name.
-    async fn search_release_group(&self, artist: &str, album: &str) -> Result<Option<String>> {
+    async fn search_release_group(
+        &self,
+        artist: &str,
+        album: &str,
+    ) -> Result<Option<(String, Option<ReleaseKind>)>> {
         self.limiter.acquire().await;
         let query = format!(
             "releasegroup:\"{}\" AND artist:\"{}\"",
@@ -432,6 +572,8 @@ struct MbGroup {
     #[serde(default)]
     score: u32,
     title: Option<String>,
+    #[serde(default, rename = "primary-type")]
+    primary_type: Option<String>,
     #[serde(default, rename = "artist-credit")]
     artist_credit: Vec<MbArtistCredit>,
 }
@@ -440,22 +582,33 @@ fn valid_mbid(id: &str) -> bool {
     id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
-pub(crate) fn pick_release_group(artist: &str, album: &str, resp: MbGroupSearch) -> Option<String> {
-    let wanted = normalize(album);
+pub(crate) fn pick_release_group(
+    artist: &str,
+    album: &str,
+    resp: MbGroupSearch,
+) -> Option<(String, Option<ReleaseKind>)> {
+    let wanted = normalize_album(album);
     if wanted.is_empty() {
         return None;
     }
     resp.release_groups
         .into_iter()
         .filter(|g| g.score >= 90)
-        .filter(|g| g.title.as_deref().is_some_and(|t| normalize(t) == wanted))
+        .filter(|g| {
+            g.title
+                .as_deref()
+                .is_some_and(|t| normalize_album(t) == wanted)
+        })
         .filter(|g| {
             g.artist_credit
                 .iter()
                 .any(|a| a.name.as_deref().is_some_and(|n| artist_matches(artist, n)))
         })
-        .map(|g| g.id)
-        .find(|id| valid_mbid(id))
+        .find(|g| valid_mbid(&g.id))
+        .map(|g| {
+            let kind = g.primary_type.as_deref().and_then(ReleaseKind::from_mb);
+            (g.id, kind)
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -510,29 +663,30 @@ impl ArtworkSource for CoverArtArchive {
     }
 
     async fn lookup(&self, track: &Track) -> Result<Option<Artwork>> {
-        let found = |image_url| Artwork {
+        let found = |image_url, release| Artwork {
             source: ArtworkSourceKind::CoverArtArchive,
             image_url,
             link_url: None,
             duration_ms: None,
+            release,
         };
         // 1. The exact release Last.fm told us about.
         if let Some(id) = &track.album_mbid
             && let Some(url) = self.release_art(id).await?
         {
-            return Ok(Some(found(url)));
+            return Ok(Some(found(url, None)));
         }
         // 2. The album's cover (release group), found by album + artist name.
         if let Some(album) = track.album.as_deref()
-            && let Some(group) = self.search_release_group(&track.artist, album).await?
+            && let Some((group, kind)) = self.search_release_group(&track.artist, album).await?
             && let Some(url) = self.release_group_art(&group).await?
         {
-            return Ok(Some(found(url)));
+            return Ok(Some(found(url, kind)));
         }
         // 3. Releases containing this recording.
         for id in self.search_release_ids(track).await? {
             if let Some(url) = self.release_art(&id).await? {
-                return Ok(Some(found(url)));
+                return Ok(Some(found(url, None)));
             }
         }
         Ok(None)
@@ -596,7 +750,16 @@ impl ArtworkResolver {
     /// Errors are logged and treated as "no art" (not cached), so presence
     /// never fails because of art.
     pub async fn resolve(&self, track: &Track) -> Option<Artwork> {
-        let key = track.cache_key();
+        // The same song on an album and as a single has different covers.
+        let key = format!(
+            "{}\u{1f}{}",
+            track.cache_key(),
+            track
+                .album
+                .as_deref()
+                .map(normalize_album)
+                .unwrap_or_default()
+        );
         if let Ok(cache) = self.cache.lock()
             && let Some(hit) = cache.get(&key, POSITIVE_TTL)
             && (hit.is_some() || cache.get(&key, NEGATIVE_TTL).is_some())
@@ -693,7 +856,8 @@ mod tests {
             &track("Daft Punk", "One More Time"),
             serde_json::from_str(APPLE).unwrap(),
         )
-        .unwrap();
+        .unwrap()
+        .art;
         assert_eq!(
             art.image_url,
             "https://is1-ssl.mzstatic.com/image/thumb/Music/y/1024x1024bb.jpg"
@@ -704,6 +868,71 @@ mod tests {
                 .starts_with("https://music.apple.com/")
         );
         assert_eq!(art.duration_ms, Some(320_357));
+        assert_eq!(art.release, Some(ReleaseKind::Album));
+    }
+
+    /// Real iTunes order for "ADÉLA Red Bottoms": the single comes first.
+    const RED_BOTTOMS: &str = r#"{"results":[
+        {"artistName":"ADÉLA","trackName":"Red Bottoms","collectionName":"Red Bottoms - Single",
+         "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/single/100x100bb.jpg",
+         "trackViewUrl":"https://music.apple.com/us/album/red-bottoms/1?i=1","trackTimeMillis":187000},
+        {"artistName":"ADÉLA","trackName":"Red Bottoms","collectionName":"PRIMA",
+         "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/prima/100x100bb.jpg",
+         "trackViewUrl":"https://music.apple.com/us/album/red-bottoms/2?i=2","trackTimeMillis":187000},
+        {"artistName":"ADÉLA","trackName":"Red Bottoms","collectionName":"Red Bottoms (Remixes) - EP",
+         "artworkUrl100":"https://is1-ssl.mzstatic.com/image/thumb/Music/ep/100x100bb.jpg"}]}"#;
+
+    fn on(album: Option<&str>) -> Track {
+        Track {
+            album: album.map(Into::into),
+            ..track("ADÉLA", "Red Bottoms")
+        }
+    }
+
+    #[test]
+    fn apple_prefers_the_album_being_played() {
+        let pick =
+            |album| pick_apple(&on(album), serde_json::from_str(RED_BOTTOMS).unwrap()).unwrap();
+
+        let p = pick(Some("PRIMA"));
+        assert!(p.album_matched);
+        assert!(p.art.image_url.contains("/prima/"), "{}", p.art.image_url);
+        assert!(p.art.link_url.unwrap().ends_with("i=2"));
+        assert_eq!(p.art.release, Some(ReleaseKind::Album));
+        // Deluxe and other bracketed editions still count as the same album.
+        assert!(pick(Some("PRIMA (Deluxe)")).album_matched);
+
+        let p = pick(Some("Red Bottoms"));
+        assert!(p.album_matched && p.art.image_url.contains("/single/"));
+        assert_eq!(p.art.release, Some(ReleaseKind::Single));
+        assert!(
+            pick(Some("Red Bottoms - Single"))
+                .art
+                .image_url
+                .contains("/single/")
+        );
+
+        let p = pick(Some("Red Bottoms (Remixes) EP"));
+        assert!(p.album_matched && p.art.image_url.contains("/ep/"));
+        assert_eq!(p.art.release, Some(ReleaseKind::Ep));
+
+        // Album unknown to Apple, or not reported: first match, flagged.
+        let p = pick(Some("Some Compilation"));
+        assert!(!p.album_matched && p.art.image_url.contains("/single/"));
+        assert!(!pick(None).album_matched);
+    }
+
+    #[test]
+    fn album_names_ignore_release_type() {
+        assert_eq!(normalize_album("Red Bottoms - Single"), "redbottoms");
+        assert_eq!(normalize_album("Love Songs - EP"), "lovesongs");
+        assert_eq!(normalize_album("Love Songs EP"), "lovesongs");
+        assert_eq!(normalize_album("PRIMA (Deluxe)"), "prima");
+        // A name that is only "EP" stays as it is.
+        assert_eq!(normalize_album("EP"), "ep");
+        assert_eq!(ReleaseKind::from_apple("X - Single"), ReleaseKind::Single);
+        assert_eq!(ReleaseKind::from_apple("X - EP"), ReleaseKind::Ep);
+        assert_eq!(ReleaseKind::from_apple("Xep"), ReleaseKind::Album);
     }
 
     #[test]
@@ -748,15 +977,17 @@ mod tests {
     fn release_group_pick() {
         let json = r#"{"release-groups":[
             {"id":"7fe26c12-b0a2-47c1-a9fc-3ea11b29225b","score":87,"title":"Hail to the Thief (B-Sides)","artist-credit":[{"name":"Radiohead"}]},
-            {"id":"5c14fd50-a2f1-3672-9537-b0dad91bea2f","score":100,"title":"Hail to the Thief","artist-credit":[{"name":"Radiohead"}]}]}"#;
+            {"id":"5c14fd50-a2f1-3672-9537-b0dad91bea2f","score":100,"title":"Hail to the Thief","primary-type":"Album","artist-credit":[{"name":"Radiohead"}]}]}"#;
         assert_eq!(
             pick_release_group(
                 "Radiohead",
                 "Hail to the Thief",
                 serde_json::from_str(json).unwrap()
-            )
-            .as_deref(),
-            Some("5c14fd50-a2f1-3672-9537-b0dad91bea2f")
+            ),
+            Some((
+                "5c14fd50-a2f1-3672-9537-b0dad91bea2f".to_owned(),
+                Some(ReleaseKind::Album)
+            ))
         );
         assert!(
             pick_release_group(
@@ -848,5 +1079,27 @@ mod live {
         let art = resolver.resolve(&track).await;
         eprintln!("resolved: {art:?}");
         assert!(art.is_some_and(|a| a.image_url.starts_with("https://")));
+    }
+
+    #[tokio::test]
+    #[ignore = "uses the real Apple service"]
+    async fn album_track_gets_album_cover_not_single() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let apple = AppleSearch::new(crate::http::client().unwrap(), "US");
+        let mut track = Track {
+            artist: "ADÉLA".into(),
+            title: "Red Bottoms".into(),
+            album: Some("PRIMA".into()),
+            album_mbid: None,
+            url: None,
+        };
+        let album = apple.lookup(&track).await.unwrap().unwrap();
+        eprintln!("album: {album:?}");
+        assert_eq!(album.release, Some(ReleaseKind::Album));
+        track.album = Some("Red Bottoms - Single".into());
+        let single = apple.lookup(&track).await.unwrap().unwrap();
+        eprintln!("single: {single:?}");
+        assert_eq!(single.release, Some(ReleaseKind::Single));
+        assert_ne!(album.image_url, single.image_url);
     }
 }

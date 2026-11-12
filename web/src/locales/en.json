@@ -108,6 +108,7 @@
     "checking": "Checking with Last.fm…",
     "done_title": "You're all set",
     "done_body": "Play a song in any app that scrobbles to Last.fm. Your Discord status updates within a few seconds.",
+    "done_autostart": "It will start when you log in to this computer. You can turn this off in Settings → Startup ({label}).",
     "finish": "Go to the dashboard",
     "discord_steps_sdk": [
       "Open the Discord Developer Portal and sign in.",
@@ -140,6 +141,9 @@
     "art_from": "Art: {source}",
     "source_apple": "Apple Music",
     "source_cover_art_archive": "Cover Art Archive",
+    "release_album": "album cover",
+    "release_ep": "EP cover",
+    "release_single": "single cover",
     "open_track": "Open on Last.fm",
     "hidden_quiet": "Quiet hours",
     "hidden_quiet_hint": "Your Discord status is hidden until quiet hours end.",
@@ -267,6 +271,19 @@
     "data_dir": "Data folder",
     "instance": "Instance",
     "instance_hint": "These come from the configuration file and environment. Edit them there and restart."
+  },
+  "startup": {
+    "title": "Startup",
+    "label_windows": "Start with Windows",
+    "label_macos": "Open at login",
+    "label_linux": "Start at login",
+    "hint": "Runs in the background with its tray icon when you log in to the computer this app runs on. On by default.",
+    "on": "RemoteMusicRP will start when you log in.",
+    "off": "RemoteMusicRP won't start when you log in.",
+    "blocked_windows": "It's turned off in Task Manager (Startup apps). Switch it on here to allow it again.",
+    "blocked_linux": "It's turned off in your desktop's startup settings. Switch it on here to allow it again.",
+    "blocked_macos": "It's turned off in System Settings. Switch it on here to allow it again.",
+    "other_location": "Your computer starts a copy of RemoteMusicRP from another folder. Switch this off and on to use this copy instead."
   },
   "updates": {
     "title": "Updates",

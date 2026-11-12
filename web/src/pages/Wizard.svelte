@@ -31,6 +31,17 @@
   let lfUser = $state('');
   let lfKey = $state('');
 
+  // Start at login is on by default: say so on the last step.
+  let autostart = $state(null);
+  $effect(() => {
+    if (step === 3 && !autostart) {
+      api
+        .get('/api/autostart')
+        .then((r) => (autostart = r))
+        .catch(() => {});
+    }
+  });
+
   async function run(fn) {
     busy = true;
     error = '';
@@ -185,6 +196,9 @@
       {:else}
         <h2>{t('wizard.done_title')}</h2>
         <p>{t('wizard.done_body')}</p>
+        {#if autostart?.enabled}
+          <p class="muted small">{t('wizard.done_autostart', { label: t(`startup.label_${autostart.os}`) })}</p>
+        {/if}
         {#if error}<p class="error-text" role="alert">{error}</p>{/if}
         <div><button class="primary" disabled={busy} onclick={finish}>{t('wizard.finish')}</button></div>
       {/if}

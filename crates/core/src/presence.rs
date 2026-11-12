@@ -559,6 +559,7 @@ mod tests {
             image_url: "https://is1-ssl.mzstatic.com/x/1024x1024bb.jpg".into(),
             link_url: Some("https://music.apple.com/us/album/x".into()),
             duration_ms: Some(320_357),
+            release: None,
         }
     }
 

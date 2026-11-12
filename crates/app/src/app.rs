@@ -41,6 +41,8 @@ pub struct NowPlayingStatus {
     pub album: Option<String>,
     pub art_url: Option<String>,
     pub art_source: Option<&'static str>,
+    /// "album", "ep" or "single": the release the cover belongs to.
+    pub art_release: Option<&'static str>,
     pub track_url: Option<String>,
     pub started_unix: u64,
     pub duration_ms: Option<u64>,

@@ -16,6 +16,7 @@ All data lives on the owner's own machine:
 | Discord OAuth2 refresh token (server mode only) | Renew the 7-day access token after restarts | Encrypted (envelope); the access token is kept in memory only | Until signed out (the token is also revoked at Discord) or Discord is disconnected |
 | Discord account name, avatar hash and online status (server mode only) | Previews | Memory only, re-read from the SDK's local cache every 5 s; never written to disk. A status the owner picks is sent to Discord and not stored | Until the process stops |
 | Pending server-mode sign-in (PKCE verifier, state, session hash) | Finish the OAuth2 sign-in | Memory only | 10 minutes or first use |
+| Start-at-login entry (desktop installs; on by default, can be turned off) | Start the app at login | Windows: a `RemoteMusicRP` value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. macOS: `~/Library/LaunchAgents/io.github.iammarxg.remotemusicrp.plist`. Linux: `~/.config/autostart/remotemusicrp.desktop`. Each holds only this program's own path, `run` and `--config <file>` if one is used; never taken from a request. The DB keeps only a flag that the default was applied | Until switched off or "Delete everything" |
 | Email credentials (Resend key or SMTP password, optional) | Re-auth alerts | Encrypted | Until removed or email is turned off |
 | Email settings (provider, sender, recipient, SMTP server/port/username) and the time the last alert of each kind was sent | Alerts, max one per problem per day | Plain (no secrets) | Until removed |
 | Admin password hash | Login | Argon2id | Until changed or deleted |
@@ -42,7 +43,8 @@ All data lives on the owner's own machine:
   1. Deletes all rows.
   2. Removes the DB, WAL and SHM files, after overwriting them where the filesystem allows it.
   3. Removes the master key from the keystore or secret file.
-  4. Returns the app to the first-run wizard.
+  4. Removes the start-at-login entry, if any.
+  5. Returns the app to the first-run wizard.
   - Note: secure overwrite cannot be guaranteed on SSDs or copy-on-write filesystems. Deleting the master key (crypto-shredding) is the real guarantee.
 
 ## Outbound connections

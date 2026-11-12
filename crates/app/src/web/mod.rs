@@ -288,6 +288,10 @@ pub fn router(app: Arc<App>) -> Router {
             "/api/danger/delete-everything",
             post(auth::delete_everything),
         )
+        .route(
+            "/api/autostart",
+            get(api::autostart).put(api::set_autostart),
+        )
         .route("/api/updates", get(api::updates))
         .route("/api/updates/check", post(api::updates_check))
         .route("/api/updates/install", post(api::updates_install))

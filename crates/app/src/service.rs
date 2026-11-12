@@ -336,6 +336,11 @@ async fn run_presence(app: &Arc<App>, creds: Creds, shutdown: &mut watch::Receiv
                                 ArtworkSourceKind::Apple => "apple",
                                 ArtworkSourceKind::CoverArtArchive => "cover_art_archive",
                             }),
+                            art_release: cur
+                                .art
+                                .as_ref()
+                                .and_then(|a| a.release)
+                                .map(|r| r.as_str()),
                             track_url: track.url.clone(),
                             started_unix: cur.started,
                             duration_ms: cur.duration(),

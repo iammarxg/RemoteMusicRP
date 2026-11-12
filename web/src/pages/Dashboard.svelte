@@ -125,7 +125,10 @@
               </div>
             {/if}
             <p class="muted small links">
-              {#if np.art_source}<span>{t('dashboard.art_from', { source: t(`dashboard.source_${np.art_source}`) })}</span>{/if}
+              {#if np.art_source}<span
+                  >{t('dashboard.art_from', { source: t(`dashboard.source_${np.art_source}`) })}{#if np.art_release}
+                    · {t(`dashboard.release_${np.art_release}`)}{/if}</span
+                >{/if}
               {#if np.track_url}<a href={np.track_url} target="_blank" rel="noopener noreferrer">{t('dashboard.open_track')}</a>{/if}
             </p>
           </div>

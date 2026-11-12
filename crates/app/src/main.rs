@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod autostart;
 mod email;
 mod sdk_mode;
 mod service;
@@ -62,7 +63,8 @@ mod windows_background {
     /// `CREATE_NO_WINDOW` from the Win32 process creation flags.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    pub fn relaunch_hidden() -> ExitCode {
+    /// `args` are passed on after `run` (only ever `--config <file>`).
+    pub fn relaunch_hidden(args: &[String]) -> ExitCode {
         let Ok(exe) = std::env::current_exe() else {
             return ExitCode::FAILURE;
         };
@@ -79,6 +81,7 @@ mod windows_background {
         };
         match Command::new(exe)
             .arg("run")
+            .args(args)
             .stdin(Stdio::null())
             .stdout(out)
             .stderr(err)
@@ -94,6 +97,14 @@ mod windows_background {
     }
 }
 
+/// The `--config` file this process was started with (absolute), if any.
+static CONFIG_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn config_path() -> Option<PathBuf> {
+    CONFIG_PATH.get().cloned()
+}
+
 pub fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -103,9 +114,13 @@ pub fn now_unix() -> u64 {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // No command: a double-click, or "Start with Windows" (which may add
+    // `--config <file>`).
     #[cfg(windows)]
-    if args.is_empty() && std::env::var_os("REMOTEMUSICRP_FOREGROUND").is_none() {
-        return windows_background::relaunch_hidden();
+    if (args.is_empty() || (args.len() == 2 && args[0] == "--config"))
+        && std::env::var_os("REMOTEMUSICRP_FOREGROUND").is_none()
+    {
+        return windows_background::relaunch_hidden(&args);
     }
     match real_main(args) {
         Ok(()) => ExitCode::SUCCESS,
@@ -125,6 +140,11 @@ fn real_main(mut args: Vec<String>) -> Result<(), String> {
         }
         config_path = Some(PathBuf::from(args.remove(i + 1)));
         args.remove(i);
+    }
+    if let Some(p) = &config_path
+        && let Ok(abs) = std::path::absolute(p)
+    {
+        let _ = CONFIG_PATH.set(abs);
     }
     let command = args.first().map(String::as_str).unwrap_or("run");
     if matches!(command, "help" | "-h" | "--help") {
@@ -312,6 +332,8 @@ fn run(cfg: Config, args: &[String]) -> Result<(), String> {
         &format!("RemoteMusicRP {} started", env!("CARGO_PKG_VERSION")),
     );
 
+    autostart::apply_default(&app);
+
     let tray = tray_common::wanted(&app, args);
     #[cfg(any(windows, target_os = "macos"))]
     if tray {
@@ -492,6 +514,7 @@ fn rotate_keys(cfg: &Config) -> Result<(), String> {
 fn delete_everything(cfg: &Config) -> Result<(), String> {
     let db = open_db(cfg)?;
     db.destroy().map_err(|e| e.to_string())?;
+    remove_autostart();
     match &cfg.key_store {
         KeyStoreConfig::ExternalFile(_) => {
             println!(
@@ -514,4 +537,13 @@ fn delete_everything(cfg: &Config) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// "Delete everything" also removes the start-at-login entry.
+pub fn remove_autostart() {
+    if autostart::status().supported
+        && let Err(e) = autostart::set(false)
+    {
+        eprintln!("warning: could not remove the start-at-login entry: {e}");
+    }
 }

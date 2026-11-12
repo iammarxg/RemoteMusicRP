@@ -59,12 +59,41 @@
     }
   });
 
+  // "Start with Windows" (only shown when the server runs on Windows).
+  let start = $state(null);
+  let startOn = $state(false);
+  let startBusy = $state(false);
+  async function loadStart() {
+    try {
+      start = await api.get('/api/autostart');
+      startOn = start.enabled;
+    } catch {
+      start = null;
+    }
+  }
+  $effect(() => {
+    if (start && !startBusy && startOn !== start.enabled) setStart(startOn);
+  });
+  async function setStart(v) {
+    startBusy = true;
+    try {
+      start = await api.put('/api/autostart', { enabled: v });
+      toast(t(v ? 'startup.on' : 'startup.off'));
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      startOn = start.enabled;
+      startBusy = false;
+    }
+  }
+
   let s = $state(null);
   let error = $state('');
   onMount(async () => {
     try {
       s = await api.get('/api/settings');
       loadUpdates();
+      loadStart();
     } catch (e) {
       error = e.message;
     }
@@ -83,6 +112,22 @@
     </div>
     <ThemeSwitch />
   </section>
+  {#if start?.supported}
+    <section class="panel stack">
+      <h2>{t('startup.title')}</h2>
+      <Toggle
+        bind:checked={startOn}
+        disabled={startBusy}
+        label={t(`startup.label_${start.os}`)}
+        hint={t('startup.hint')}
+      />
+      {#if start.blocked_by_system}
+        <p class="muted small">{t(`startup.blocked_${start.os}`)}</p>
+      {:else if start.enabled && start.other_location}
+        <p class="muted small">{t('startup.other_location')}</p>
+      {/if}
+    </section>
+  {/if}
   {#if up}
     {@const i = up.info}
     <section class="panel stack">

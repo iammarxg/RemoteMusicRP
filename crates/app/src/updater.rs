@@ -82,7 +82,7 @@ pub fn install_kind() -> &'static str {
 /// must replace the `.AppImage` file itself (named by the AppImage runtime in
 /// `$APPIMAGE`). Only trusted when our own executable sits inside `$APPDIR`
 /// and the path is an absolute, existing `*.AppImage` file.
-fn appimage_path() -> Option<PathBuf> {
+pub(crate) fn appimage_path() -> Option<PathBuf> {
     if !cfg!(target_os = "linux") {
         return None;
     }

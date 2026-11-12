@@ -570,6 +570,41 @@ pub async fn updates_settings(
     Ok(Json(json!({ "auto_install": body.auto_install })))
 }
 
+pub async fn autostart(
+    State(app): State<Arc<App>>,
+    ctx: Ctx,
+) -> ApiResult<Json<crate::autostart::Status>> {
+    ctx.require_auth(&app)?;
+    Ok(Json(crate::autostart::status()))
+}
+
+#[derive(Deserialize)]
+pub struct AutostartBody {
+    enabled: bool,
+}
+
+/// Turn start at login on or off. The command written to the registry
+/// is always this program's own path, never anything from the request.
+pub async fn set_autostart(
+    State(app): State<Arc<App>>,
+    ctx: Ctx,
+    headers: HeaderMap,
+    Json(body): Json<AutostartBody>,
+) -> ApiResult<Json<crate::autostart::Status>> {
+    ctx.guard(&app, &headers)?;
+    crate::autostart::set(body.enabled).map_err(ApiError::bad_request)?;
+    let _ = app.db.log(
+        LogLevel::Info,
+        "settings",
+        if body.enabled {
+            "Start at login turned on"
+        } else {
+            "Start at login turned off"
+        },
+    );
+    Ok(Json(crate::autostart::status()))
+}
+
 pub async fn about() -> Json<serde_json::Value> {
     Json(json!({
         "name": "RemoteMusicRP",
